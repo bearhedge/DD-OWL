@@ -1872,7 +1872,7 @@
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
         </svg>
       </button>
-      <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs(this.value)" style="padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; width: 120px; margin-left: 8px;">
+      <input type="text" id="logSearchInput" placeholder="Search logs..." oninput="filterLogs(this.value)" style="padding: 4px 8px; border: 1px solid #333; border-radius: 4px; font-size: 12px; width: 120px; margin-left: 8px; background: #0a0a0a; color: #e0e0e0; outline: none;">
       <span id="logSearchCount" style="font-size: 11px; color: #666; margin-left: 4px;"></span>
       <div class="activity-status">
         <div class="status-dot" id="statusDot"></div>
@@ -2922,7 +2922,6 @@
 
       if (data.type === 'search_progress') {
         addLogEntry('search', `Query ${data.queryIndex}/${data.totalQueries} | ${data.resultsFound} results | ${data.query}`);
-        updateActivityStats(`Searching ${data.queryIndex}/${data.totalQueries} (${data.totalSoFar} total)`);
         const pct = calculateOverallProgress('gather', data.queryIndex, data.totalQueries);
         updateProgressCard('running', pct, progressState.redCount, progressState.amberCount, name);
       }
@@ -3420,7 +3419,6 @@
 
           if (data.type === 'search_progress') {
             addLogEntry('search', `Query ${data.queryIndex}/${data.totalQueries} | ${data.resultsFound} results | ${data.query}`);
-            updateActivityStats(`Searching ${data.queryIndex}/${data.totalQueries} (${data.totalSoFar} total)`);
           }
 
           // Handle clustering
@@ -4140,7 +4138,6 @@
 
           if (data.type === 'search_progress') {
             addLogEntry('search', `Query ${data.queryIndex}/${data.totalQueries} | ${data.resultsFound} results | ${data.query}`);
-            updateActivityStats(`Searching ${data.queryIndex}/${data.totalQueries} (${data.totalSoFar} total)`);
             // Update progress bar
             const pct = calculateOverallProgress('gather', data.queryIndex, data.totalQueries);
             updateProgressCard('running', pct, progressState.redCount, progressState.amberCount, name);
