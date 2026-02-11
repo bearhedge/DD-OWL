@@ -11,12 +11,13 @@ export function initReportsDb(dbPath?: string): void {
   db.pragma('synchronous = NORMAL');
   db.exec(SCHEMA);
 
-  // Migration: add clean_results_json column for existing databases
+  // Migrations for existing databases
   try {
     db.exec('ALTER TABLE reports ADD COLUMN clean_results_json TEXT');
-  } catch {
-    // Column already exists — ignore
-  }
+  } catch { /* Column already exists */ }
+  try {
+    db.exec('ALTER TABLE reports ADD COLUMN screening_stats_json TEXT');
+  } catch { /* Column already exists */ }
 }
 
 export function getReportsDb(): Database.Database {
@@ -36,6 +37,14 @@ export interface CleanEntityResult {
   snippet: string;
 }
 
+export interface ScreeningStats {
+  gathered: number;
+  programmaticElimination: { before: number; after: number; eliminated: number; govBypassed: number };
+  categorized: { red: number; amber: number; green: number };
+  processed: { total: number; adverse: number; cleared: number; failed: number };
+  consolidated: { before: number; after: number };
+}
+
 export interface SaveReportInput {
   runId: string;
   subjectName: string;
@@ -52,6 +61,7 @@ export interface SaveReportInput {
     sourceUrls: { url: string; title: string }[];
   }[];
   cleanResults?: Record<string, CleanEntityResult[]>;
+  screeningStats?: ScreeningStats;
   reportMarkdown?: string;
   costUsd: number;
   durationMs: number;
@@ -71,6 +81,7 @@ export interface ReportRow {
   amber_count: number;
   report_markdown: string | null;
   clean_results_json: string | null;
+  screening_stats_json: string | null;
   edited_markdown: string | null;
   edit_distance: number | null;
   cost_usd: number;
@@ -145,12 +156,24 @@ export function saveReport(input: SaveReportInput): number {
   const d = getReportsDb();
   const redCount = input.findings.filter(f => f.severity === 'RED').length;
   const amberCount = input.findings.filter(f => f.severity === 'AMBER').length;
+  const statsJson = input.screeningStats ? JSON.stringify(input.screeningStats) : null;
 
-  const insertReport = d.prepare(`
+  // Upsert: if run_id already exists (reconnection), update instead of creating duplicate
+  const upsertReport = d.prepare(`
     INSERT INTO reports (run_id, subject_name, screened_at, language, name_variations,
-      finding_count, red_count, amber_count, report_markdown, clean_results_json, cost_usd, duration_ms,
-      queries_executed, total_search_results)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      finding_count, red_count, amber_count, report_markdown, clean_results_json, screening_stats_json,
+      cost_usd, duration_ms, queries_executed, total_search_results)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(run_id) DO UPDATE SET
+      finding_count = excluded.finding_count,
+      red_count = excluded.red_count,
+      amber_count = excluded.amber_count,
+      clean_results_json = excluded.clean_results_json,
+      screening_stats_json = excluded.screening_stats_json,
+      cost_usd = excluded.cost_usd,
+      duration_ms = excluded.duration_ms,
+      queries_executed = excluded.queries_executed,
+      total_search_results = excluded.total_search_results
   `);
 
   const insertFinding = d.prepare(`
@@ -159,14 +182,20 @@ export function saveReport(input: SaveReportInput): number {
   `);
 
   const result = d.transaction(() => {
-    const res = insertReport.run(
+    upsertReport.run(
       input.runId, input.subjectName, input.screenedAt, input.language,
       JSON.stringify(input.nameVariations), input.findings.length, redCount, amberCount,
       input.reportMarkdown || null, input.cleanResults ? JSON.stringify(input.cleanResults) : null,
-      input.costUsd, input.durationMs,
+      statsJson, input.costUsd, input.durationMs,
       input.queriesExecuted, input.totalSearchResults,
     );
-    const reportId = res.lastInsertRowid as number;
+
+    // Get the report id (works for both insert and update)
+    const row = d.prepare('SELECT id FROM reports WHERE run_id = ?').get(input.runId) as { id: number };
+    const reportId = row.id;
+
+    // Delete old findings before re-inserting (for upsert case)
+    d.prepare('DELETE FROM findings WHERE report_id = ?').run(reportId);
 
     for (const f of input.findings) {
       insertFinding.run(reportId, f.severity, f.headline, f.eventType, f.summary,
@@ -423,6 +452,7 @@ const SCHEMA = `
     amber_count INTEGER NOT NULL DEFAULT 0,
     report_markdown TEXT,
     clean_results_json TEXT,
+    screening_stats_json TEXT,
     edited_markdown TEXT,
     edit_distance REAL,
     cost_usd REAL NOT NULL DEFAULT 0,

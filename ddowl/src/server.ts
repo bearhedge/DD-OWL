@@ -28,7 +28,7 @@ import { isBaiduAvailable } from './baiduSearcher.js';
 import { fetchPageContent, analyzeWithLLM, closeBrowser, quickScan } from './analyzer.js';
 import { triageSearchResults, TriageResult, categorizeAll, CategorizedResult } from './triage.js';
 import { consolidateFindings } from './consolidator.js';
-import { generateFullReport, generateCleanWriteUp } from './reportGenerator.js';
+import { generateFullReport, generateCleanWriteUp, generateWriteUp } from './reportGenerator.js';
 import { RawFinding, ConsolidatedFinding, SearchResult, SubjectProfile, ProfileFact } from './types.js';
 import { extractFinding, isSameFinding, mergeFindings, Finding } from './extract.js';
 import { detectCategory } from './searchStrings.js';
@@ -2740,8 +2740,10 @@ If you cannot determine a field with reasonable confidence, use the default empt
 
     // Auto-save to reports database
     try {
+      // Use sessionId as runId so reconnections upsert instead of creating duplicates
+      const stableRunId = sessionId;
       const reportId = saveReportToDb({
-        runId: metrics.runId,
+        runId: stableRunId,
         subjectName,
         screenedAt: metrics.startTime,
         language: language || 'zh',
@@ -2756,6 +2758,30 @@ If you cannot determine a field with reasonable confidence, use the default empt
           sourceUrls: f.sources,
         })),
         cleanResults: Object.keys(cleanResults).length > 0 ? cleanResults : undefined,
+        screeningStats: {
+          gathered: allResults.length,
+          programmaticElimination: {
+            before: allResults.length,
+            after: passed.length,
+            eliminated: progEliminated.length,
+            govBypassed: bypassed.length,
+          },
+          categorized: {
+            red: categorized.red.length,
+            amber: categorized.amber.length,
+            green: categorized.green.length,
+          },
+          processed: {
+            total: urlTracker.processed.length,
+            adverse: urlTracker.processed.filter(p => p.result === 'ADVERSE').length,
+            cleared: urlTracker.processed.filter(p => p.result === 'CLEARED').length,
+            failed: urlTracker.processed.filter(p => p.result === 'FAILED').length,
+          },
+          consolidated: {
+            before: allFindings.length,
+            after: consolidatedFindings.length,
+          },
+        },
         costUsd: metrics.totalCostUSD,
         durationMs: metrics.durationMs || 0,
         queriesExecuted: metrics.queriesExecuted,
@@ -2763,7 +2789,7 @@ If you cannot determine a field with reasonable confidence, use the default empt
       });
       console.log(`[REPORTS] Saved report #${reportId} for ${subjectName}`);
       // Store runId and cleanResults in session so generate-report can access them
-      await updateSession(sessionId, { runId: metrics.runId, cleanResults } as any, connectionId);
+      await updateSession(sessionId, { runId: stableRunId, cleanResults } as any, connectionId);
     } catch (reportErr) {
       console.error('[REPORTS] Failed to save to database:', reportErr);
     }
@@ -2996,11 +3022,8 @@ app.post('/api/session/:sessionId/generate-report', async (req: Request, res: Re
   const hasCleanEntities = Object.keys(cleanResults).length > 0;
   console.log(`[REPORT] Name variations: ${nameVariations.length}, clean entities: ${Object.keys(cleanResults).length}`);
 
-  // Check LLM configuration
-  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-  const KIMI_API_KEY = process.env.KIMI_API_KEY || '';
-
-  if (!DEEPSEEK_API_KEY && !KIMI_API_KEY) {
+  // Check LLM configuration (generateWriteUp needs at least one provider)
+  if (!process.env.DEEPSEEK_API_KEY && !process.env.KIMI_API_KEY) {
     res.status(500).json({ error: 'No LLM API configured' });
     return;
   }
@@ -3084,7 +3107,7 @@ app.post('/api/session/:sessionId/generate-report', async (req: Request, res: Re
 
       if (matchedConsolidated?.articleContents && matchedConsolidated.articleContents.length > 0) {
         articleText = matchedConsolidated.articleContents
-          .map((ac) => ac.content)
+          .map((ac: any) => ac.content)
           .join('\n\n---\n\n')
           .slice(0, 8000);
       } else {
@@ -3100,142 +3123,39 @@ app.post('/api/session/:sessionId/generate-report', async (req: Request, res: Re
 
       console.log(`[REPORT] Finding ${i + 1}: ${articleText ? `${articleText.length} chars of article text` : 'no article text, metadata only'}`);
 
-      // Generate professional due diligence paragraph
-      const prompt = articleText
-        ? `You are a professional due diligence report writer. Read the following article and write a factual report paragraph.
+      // Build a ConsolidatedFinding-compatible object for generateWriteUp
+      const consolidatedFinding = {
+        headline: finding.headline || 'Finding',
+        summary: finding.summary || '',
+        severity: (finding.severity || 'AMBER') as 'RED' | 'AMBER' | 'REVIEW',
+        eventType: finding.eventType || 'unknown',
+        dateRange: finding.dateRange || '',
+        sourceCount: finding.sourceCount || sources.length,
+        sources: sources.map((s: any) => ({ url: s.url, title: s.title || '' })),
+      };
 
-ARTICLE TEXT:
-${articleText}
-
-SCREENING CLAIMS (cross-reference these against the article — use the article as ground truth, silently correct any inaccuracies):
-- Headline: ${finding.headline || 'N/A'}
-- Summary: ${finding.summary || 'N/A'}
-
-SUBJECT BEING SCREENED: ${subjectName}
-PRIMARY SOURCE: ${primarySource?.title || 'Unknown source'}
-SOURCE URL: ${primarySource?.url || 'N/A'}
-PUBLICATION DATE: ${finding.dateRange || 'Unknown'}
-ADDITIONAL SOURCES: ${otherSources.map((s: any) => s.title || s.url).join(', ') || 'None'}
-SOURCE COUNT: ${finding.sourceCount || 1}
-
-WRITING INSTRUCTIONS:
-1. Start with: "According to an article published by [state whether mainstream or alternative media outlet] [outlet name] on [Month Year], ..."
-2. Write a topic sentence summarizing the key finding
-3. Follow with 3-5 sentences covering ALL key facts from the article as they relate to ${subjectName}
-4. Include specific details: names, dates, amounts, entities, roles mentioned in the article
-5. Do NOT include any information not present in the source article — no hallucination
-6. Write in neutral, professional due diligence English (third person, past tense for events, present tense for ongoing matters)
-7. Do NOT use bullet points — write flowing prose paragraphs only
-
-Return ONLY the paragraph text, no JSON, no markdown formatting, no headers.`
-        : `Write a due diligence report paragraph for this finding:
-
-Subject being screened: ${subjectName}
-Source: ${primarySource?.title || 'Unknown source'}
-Source URL: ${primarySource?.url || 'N/A'}
-Publication date: ${finding.dateRange || 'Unknown'}
-Allegation/Event: ${finding.headline || 'N/A'}
-Key details: ${finding.summary || 'N/A'}
-Additional sources: ${otherSources.map((s: any) => s.title || s.url).join(', ') || 'None'}
-Source count: ${finding.sourceCount || 1}
-
-Start with "According to an article published by [Source] on [Date]..." or "According to [Source]..." if date unknown.
-Write a topic sentence then 3-5 sentences with key facts relating to ${subjectName}.
-Write in professional due diligence tone. No bullet points, flowing paragraphs only.
-Do NOT include any information not stated in the source material.
-Return ONLY the paragraph text, no JSON or markdown.`;
-
-      // Try LLM providers in order (Kimi K2 preferred for better writing quality)
-      const providers = [
-        { name: 'Kimi K2', url: 'https://api.moonshot.ai/v1/chat/completions', key: KIMI_API_KEY, model: 'kimi-k2' },
-        { name: 'DeepSeek', url: 'https://api.deepseek.com/v1/chat/completions', key: DEEPSEEK_API_KEY, model: 'deepseek-chat' },
-      ].filter(p => p.key);
-
+      // Use unified generateWriteUp from reportGenerator (streams via SSE)
       let paragraph = '';
-      let streamed = false;
-
-      for (const provider of providers) {
-        if (clientDisconnected) break;
-        try {
-          // Use streaming LLM call
-          const llmResponse = await axios.post(
-            provider.url,
-            {
-              model: provider.model,
-              messages: [{ role: 'user', content: prompt }],
-              temperature: 0.3,
-              stream: true,
-            },
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${provider.key}`,
-              },
-              timeout: 60000,
-              responseType: 'stream',
-            }
-          );
-
-          // Parse SSE stream from LLM
-          paragraph = await new Promise<string>((resolve, reject) => {
-            let accumulated = '';
-            let buffer = '';
-
-            llmResponse.data.on('data', (chunk: Buffer) => {
-              if (clientDisconnected) {
-                llmResponse.data.destroy();
-                resolve(accumulated);
-                return;
-              }
-
-              buffer += chunk.toString();
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || !trimmed.startsWith('data: ')) continue;
-                const payload = trimmed.slice(6);
-                if (payload === '[DONE]') continue;
-
-                try {
-                  const parsed = JSON.parse(payload);
-                  const token = parsed.choices?.[0]?.delta?.content;
-                  if (token) {
-                    accumulated += token;
-                    sendEvent({ type: 'finding_token', index: i, token });
-                  }
-                } catch {
-                  // Skip unparseable lines
-                }
-              }
-            });
-
-            llmResponse.data.on('end', () => resolve(accumulated));
-            llmResponse.data.on('error', (err: Error) => reject(err));
-          });
-
-          if (paragraph.trim()) {
-            paragraph = paragraph.trim();
-            streamed = true;
-            console.log(`[REPORT] ✓ ${provider.name} streamed ${paragraph.length} chars`);
-            break;
-          }
-        } catch (err: any) {
-          console.log(`[REPORT] ✗ ${provider.name} failed: ${err.message}`);
-          continue;
-        }
+      try {
+        paragraph = await generateWriteUp(
+          consolidatedFinding,
+          subjectName,
+          (chunk: string) => {
+            sendEvent({ type: 'finding_token', index: i, token: chunk });
+          },
+          articleText || undefined
+        );
+      } catch (err: any) {
+        console.log(`[REPORT] generateWriteUp failed: ${err.message}`);
       }
 
-      // Fallback if no LLM succeeded
+      // Fallback if generateWriteUp returned empty
       if (!paragraph) {
         paragraph = `According to ${primarySource?.title || 'news reports'}, ${finding.headline || 'an adverse finding was identified'}. ${finding.summary || ''}`;
         if (finding.sourceCount > 1) {
           paragraph += ` This information was corroborated by ${finding.sourceCount - 1} additional source(s).`;
         }
-        // Send fallback text as a single token event so frontend displays it
         sendEvent({ type: 'finding_token', index: i, token: paragraph });
-        sendEvent({ type: 'finding_fallback', index: i, paragraph });
       }
 
       sendEvent({ type: 'finding_complete', index: i, paragraph });

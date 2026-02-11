@@ -473,17 +473,38 @@
         emptyState.style.display = 'none';
         tbody.innerHTML = data.reports.map(r => {
           const date = new Date(r.screened_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-          const badges = [];
-          if (r.red_count > 0) badges.push(`<span class="severity-badge red">${r.red_count} RED</span>`);
-          if (r.amber_count > 0) badges.push(`<span class="severity-badge amber">${r.amber_count - r.red_count >= 0 ? r.amber_count : 0} AMBER</span>`);
           const editPct = r.edit_distance != null ? (r.edit_distance * 100).toFixed(0) + '%' : '-';
           const reviewClass = r.edited_markdown ? 'reviewed' : (r.edit_distance != null ? 'pending' : 'unreviewed');
           const reviewText = r.edited_markdown ? 'Reviewed' : 'Pending';
 
+          // Build funnel string from screening stats
+          let funnelText = '';
+          if (r.screening_stats_json) {
+            try {
+              const s = JSON.parse(r.screening_stats_json);
+              const gathered = s.gathered || 0;
+              const flagged = (s.categorized?.red || 0) + (s.categorized?.amber || 0);
+              const analyzed = s.processed?.total || 0;
+              const findings = r.finding_count || 0;
+              const redAmber = [];
+              if (r.red_count > 0) redAmber.push(`${r.red_count}R`);
+              if (r.amber_count > 0) redAmber.push(`${r.amber_count}A`);
+              funnelText = `${gathered} → ${flagged} flagged → ${analyzed} analyzed → ${findings} findings` +
+                (redAmber.length > 0 ? ` (${redAmber.join(' ')})` : '');
+            } catch { /* ignore */ }
+          }
+          if (!funnelText) {
+            // Fallback: just show badges
+            const badges = [];
+            if (r.red_count > 0) badges.push(`<span class="severity-badge red">${r.red_count} RED</span>`);
+            if (r.amber_count > 0) badges.push(`<span class="severity-badge amber">${r.amber_count} AMBER</span>`);
+            funnelText = badges.join(' ') || '<span style="color:#444">0</span>';
+          }
+
           return `<tr onclick="openReport(${r.id})">
             <td><strong>${escapeHtml(r.subject_name)}</strong></td>
             <td>${date}</td>
-            <td>${badges.join(' ') || '<span style="color:#444">0</span>'}</td>
+            <td>${funnelText}</td>
             <td>${editPct}</td>
             <td><span class="review-status ${reviewClass}">${reviewText}</span></td>
           </tr>`;
@@ -504,11 +525,41 @@
       const nameVars = JSON.parse(report.name_variations || '[]');
       const date = new Date(report.screened_at).toLocaleString();
 
+      // Build screening funnel stats if available
+      let statsHtml = '';
+      if (report.screening_stats_json) {
+        try {
+          const s = JSON.parse(report.screening_stats_json);
+          statsHtml = `
+            <div style="background:#0a0a0a; border:1px solid #222; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:12px;">
+              <div style="color:#888; margin-bottom:8px; font-size:11px; text-transform:uppercase;">Screening Funnel</div>
+              <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
+                <span style="color:#4a9eff;">${s.gathered || 0} gathered</span>
+                <span style="color:#555;">→</span>
+                <span style="color:#e0e0e0;">${s.programmaticElimination?.after || 0} after filter</span>
+                <span style="color:#555;">→</span>
+                <span><span style="color:#ff4757;">${s.categorized?.red || 0} RED</span> <span style="color:#ffa502;">${s.categorized?.amber || 0} AMBER</span> <span style="color:#2ed573;">${s.categorized?.green || 0} GREEN</span></span>
+                <span style="color:#555;">→</span>
+                <span style="color:#e0e0e0;">${s.processed?.total || 0} analyzed</span>
+                <span style="color:#555;">→</span>
+                <span style="color:#e0e0e0;">${s.consolidated?.after || report.finding_count} findings</span>
+              </div>
+              <div style="color:#555; margin-top:6px; font-size:11px;">
+                Eliminated: ${s.programmaticElimination?.eliminated || 0} noise
+                ${s.programmaticElimination?.govBypassed ? ' | ' + s.programmaticElimination.govBypassed + ' gov bypassed' : ''}
+                | Processed: ${s.processed?.adverse || 0} adverse, ${s.processed?.cleared || 0} cleared, ${s.processed?.failed || 0} failed
+                ${s.consolidated ? ' | Consolidated: ' + s.consolidated.before + ' → ' + s.consolidated.after : ''}
+              </div>
+            </div>`;
+        } catch { /* ignore */ }
+      }
+
       let html = `
         <div style="font-size:12px; color:#666; margin-bottom:16px;">
           ${date} | ${report.finding_count} findings | ${report.queries_executed} queries | $${report.cost_usd.toFixed(2)}
           ${nameVars.length > 1 ? ' | Variants: ' + nameVars.map(v => escapeHtml(v)).join(', ') : ''}
         </div>
+        ${statsHtml}
       `;
 
       // Findings

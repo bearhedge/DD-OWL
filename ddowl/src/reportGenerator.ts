@@ -45,24 +45,38 @@ function getProviders(): LLMProvider[] {
 export type StreamCallback = (chunk: string) => void;
 
 /**
- * Generate write-up for a single finding with streaming
+ * Generate write-up for a single finding with streaming.
+ * When articleContent is provided, the LLM uses the actual article text as ground truth.
+ * When missing, it generates from metadata only and notes limited source access.
  */
 export async function generateWriteUp(
   finding: ConsolidatedFinding,
   subjectName: string,
-  onChunk: StreamCallback
+  onChunk: StreamCallback,
+  articleContent?: string
 ): Promise<string> {
   const isRed = finding.severity === 'RED';
   const detailLevel = isRed ? '3-4 paragraphs with full detail' : '1-2 paragraphs, key facts only';
 
-  const sourcesText = finding.sources.map((s, i) => `- ${s.url}`).join('\n');
+  const sourcesText = finding.sources.map((s, i) => `[${i + 1}]  ${s.url}`).join('\n');
+
+  // Build article section for the prompt
+  const articleSection = articleContent
+    ? `ARTICLE TEXT (use as ground truth — cross-reference claims against this):
+${articleContent.slice(0, 8000)}
+
+`
+    : `NOTE: Full article text was not available. Write based on the metadata below only.
+State clearly what is known from the source metadata vs what could not be verified.
+
+`;
 
   const prompt = `Write a professional due diligence finding following this EXACT format and style.
 
 SUBJECT: ${subjectName}
 ISSUE HEADLINE: ${finding.headline}
 ISSUE SUMMARY: ${finding.summary}
-SOURCE URLs:
+${articleSection}SOURCE URLs:
 ${sourcesText}
 
 FORMAT RULES (follow exactly):
@@ -99,21 +113,26 @@ FORMAT RULES (follow exactly):
    - "X was not penalized or accused of any wrongdoing for the issue."
    - "No further details relating to the issue were found."
 
+7. SOURCES: End the write-up with source footnotes
+   Format: [1]  URL
+
 STRICT RULES:
 - Do NOT include severity labels (RED, AMBER, etc.)
 - Do NOT editorialize or use dramatic language
 - Do NOT add meta-commentary about the report
-- Do NOT use footnote numbers or "Ibid."
 - Do NOT use bullet points unless listing multiple sub-incidents
 - Keep tone neutral and factual throughout
 - Write ${detailLevel}
+- End with source footnotes using [1], [2] etc. referencing the SOURCE URLs above
 
 EXAMPLE OUTPUT:
 Involvement in his uncle Yang Xiancai judicial corruption case (2008 – 2010)
 
 According to an article published in December 2023, Xu was involved in a corruption scandal involving Yang Xiancai (杨贤才, "Yang"), the former director of the Guangdong Higher People's Court Enforcement Bureau (广东省高级人民法院原执行局局长). Xu, then the chairman of Shenzhen Zhaobangji Group, received CNY 7.5 million (USD 1.05 million) from Yang in exchange for 10% equity in a commercial plaza project in Shenzhen Dongmen (东门) in 2006, which was held by Yang's son Yang Bin (杨彬). The article noted that the funds involved in the transaction were proceeds from Yang's bribery activities.
 
-When investigators carried out asset recovery in January 2009, Xu returned the CNY 7.5 million (USD 1.05 million) and claimed he didn't know the proceeds had been from Yang's illegal gains. No information was found in online research indicating Xu was further investigated or charged in the issue.
+When investigators carried out asset recovery in January 2009, Xu returned the CNY 7.5 million (USD 1.05 million) and claimed he didn't know the proceeds had been from Yang's illegal gains. No information was found in online research indicating Xu was further investigated or charged in the issue.[1]
+
+[1]  https://example.com/article
 
 Now write the finding for the issue described above:`;
 
@@ -352,7 +371,9 @@ export async function generateFullReport(
       const entityFindings = findingsByEntity.get(nv) || [];
       for (let i = 0; i < entityFindings.length; i++) {
         if (i > 0) onChunk('\n\n');
-        await generateWriteUp(entityFindings[i], subjectName, onChunk);
+        // Pass article content if available for richer, grounded write-ups
+        const articleContent = entityFindings[i].articleContents?.map(ac => ac.content).join('\n\n---\n\n');
+        await generateWriteUp(entityFindings[i], subjectName, onChunk, articleContent || undefined);
       }
     } else if (cleanResults[nv] && cleanResults[nv].length > 0) {
       // Clean entity: generate template-based write-up
