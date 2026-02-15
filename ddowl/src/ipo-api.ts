@@ -43,7 +43,7 @@ ipoRouter.get('/pipeline', async (req: Request, res: Response) => {
  * Returns all deals with optional filters
  */
 ipoRouter.get('/deals', async (req: Request, res: Response) => {
-  const { status, board, bank_id, limit = 50 } = req.query;
+  const { status, board, bank_id, search, limit = 50 } = req.query;
 
   try {
     let query = `
@@ -54,9 +54,18 @@ ipoRouter.get('/deals', async (req: Request, res: Response) => {
         d.filing_date,
         d.listing_date,
         d.hkex_app_id,
+        d.deal_type,
+        d.shares_offered,
+        d.price_hkd,
+        d.size_hkdm,
+        d.is_dual_listing,
+        d.prospectus_url,
         c.name_en as company_name,
         c.name_cn as company_name_cn,
         c.sector,
+        c.industry,
+        c.sub_industry,
+        c.stock_code,
         json_agg(json_build_object(
           'bank_id', b.id,
           'bank_name', b.name,
@@ -90,12 +99,28 @@ ipoRouter.get('/deals', async (req: Request, res: Response) => {
       params.push(bank_id);
     }
 
+    if (search) {
+      query += ` AND (
+        c.name_en ILIKE $${paramIndex} OR
+        c.name_cn ILIKE $${paramIndex} OR
+        c.stock_code ILIKE $${paramIndex} OR
+        c.industry ILIKE $${paramIndex} OR
+        EXISTS (SELECT 1 FROM deal_appointments da2 JOIN banks b2 ON b2.id = da2.bank_id WHERE da2.deal_id = d.id AND b2.name ILIKE $${paramIndex})
+      )`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // Default limit: 200 for listed, 500 for active
+    const defaultLimit = status === 'listed' ? 200 : (status === 'active' ? 500 : 50);
+    const effectiveLimit = Number(limit) || defaultLimit;
+
     query += `
       GROUP BY d.id, c.id
-      ORDER BY d.filing_date DESC
+      ORDER BY COALESCE(d.listing_date, d.filing_date) DESC
       LIMIT $${paramIndex}
     `;
-    params.push(Number(limit));
+    params.push(effectiveLimit);
 
     const result = await pool.query(query, params);
     res.json({
@@ -142,7 +167,7 @@ ipoRouter.get('/deals/:id', async (req: Request, res: Response) => {
       FROM deal_appointments da
       JOIN banks b ON b.id = da.bank_id
       WHERE da.deal_id = $1
-      ORDER BY da.is_lead DESC, da.role
+      ORDER BY da.is_lead DESC, da.roles
     `, [id]);
 
     const announcementsResult = await pool.query(`
@@ -433,6 +458,162 @@ ipoRouter.post('/validate/:id', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Validation error:', err);
     res.status(500).json({ error: 'Failed to save validation' });
+  }
+});
+
+/**
+ * POST /api/ipo/scrape-oc
+ * Triggers OC announcement scrape using hkex-scraper-v2
+ */
+ipoRouter.post('/scrape-oc', async (req: Request, res: Response) => {
+  try {
+    // Create scrape run record
+    const runResult = await pool.query(`
+      INSERT INTO scrape_runs (source, board, status)
+      VALUES ('hkex', 'mainBoard', 'running')
+      RETURNING id
+    `);
+    const runId = runResult.rows[0].id;
+
+    // Return immediately
+    res.json({
+      message: 'Scrape started',
+      runId,
+      status: 'running',
+    });
+
+    // Run scraper in background
+    (async () => {
+      try {
+        const { scrapeAllApplications, closeBrowser } = await import('./hkex-scraper-v2.js');
+        const deals = await scrapeAllApplications({ years: [2025, 2024], extractBanks: true });
+
+        let newDeals = 0;
+        let newAppointments = 0;
+
+        for (const deal of deals) {
+          // Parse filing date
+          let filingDate: string | null = null;
+          if (deal.filingDate) {
+            const parts = deal.filingDate.split('/');
+            if (parts.length === 3) {
+              filingDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            }
+          }
+
+          // Upsert company
+          const companyResult = await pool.query(`
+            INSERT INTO companies (name_en)
+            VALUES ($1)
+            ON CONFLICT (name_en) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+          `, [deal.company]);
+          const companyId = companyResult.rows[0].id;
+
+          // Upsert deal
+          const dealResult = await pool.query(`
+            INSERT INTO deals (company_id, status, filing_date, hkex_app_id, board)
+            VALUES ($1, 'active', $2, $3, $4)
+            ON CONFLICT (company_id) WHERE status = 'active' DO UPDATE SET
+              filing_date = COALESCE(EXCLUDED.filing_date, deals.filing_date),
+              hkex_app_id = COALESCE(EXCLUDED.hkex_app_id, deals.hkex_app_id),
+              updated_at = NOW()
+            RETURNING id, (xmax = 0) as inserted
+          `, [companyId, filingDate, deal.appId, deal.board]);
+
+          const dealId = dealResult.rows[0].id;
+          if (dealResult.rows[0].inserted) newDeals++;
+
+          // Insert OC announcement
+          if (deal.ocPdfUrl) {
+            await pool.query(`
+              INSERT INTO oc_announcements (deal_id, announcement_date, pdf_url)
+              VALUES ($1, $2, $3)
+              ON CONFLICT DO NOTHING
+            `, [dealId, filingDate, deal.ocPdfUrl]);
+          }
+
+          // Insert bank appointments
+          for (const bank of deal.banks) {
+            const bankResult = await pool.query(`
+              INSERT INTO banks (name)
+              VALUES ($1)
+              ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
+              RETURNING id
+            `, [bank.bank]);
+            const bankId = bankResult.rows[0].id;
+
+            await pool.query(`
+              INSERT INTO deal_appointments (deal_id, bank_id, roles, is_lead)
+              VALUES ($1, $2, $3::bank_role[], $4)
+              ON CONFLICT (deal_id, bank_id) DO UPDATE SET
+                roles = EXCLUDED.roles,
+                is_lead = EXCLUDED.is_lead
+            `, [dealId, bankId, bank.roles, bank.isLead]);
+            newAppointments++;
+          }
+        }
+
+        await pool.query(`
+          UPDATE scrape_runs SET
+            completed_at = NOW(),
+            status = 'completed',
+            announcements_found = $2,
+            announcements_parsed = $2,
+            new_deals = $3,
+            new_appointments = $4
+          WHERE id = $1
+        `, [runId, deals.length, newDeals, newAppointments]);
+
+        await closeBrowser();
+      } catch (err) {
+        console.error('Scrape-oc error:', err);
+        await pool.query(`
+          UPDATE scrape_runs SET
+            completed_at = NOW(),
+            status = 'failed',
+            errors = $2
+          WHERE id = $1
+        `, [runId, JSON.stringify({ error: String(err) })]);
+      }
+    })();
+  } catch (err) {
+    console.error('Scrape-oc trigger error:', err);
+    res.status(500).json({ error: 'Failed to start scrape' });
+  }
+});
+
+/**
+ * GET /api/ipo/scrape-runs/:id
+ * Returns scrape run status for polling
+ */
+ipoRouter.get('/scrape-runs/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query('SELECT * FROM scrape_runs WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Scrape run not found' });
+      return;
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Scrape run query error:', err);
+    res.status(500).json({ error: 'Failed to fetch scrape run' });
+  }
+});
+
+/**
+ * POST /api/ipo/check-listings
+ * Checks active deals against HKEX securities list for newly listed companies
+ */
+ipoRouter.post('/check-listings', async (req: Request, res: Response) => {
+  try {
+    const { checkListings } = await import('./listing-detector.js');
+    const result = await checkListings(pool);
+    res.json(result);
+  } catch (err) {
+    console.error('Check listings error:', err);
+    res.status(500).json({ error: 'Failed to check listings' });
   }
 });
 

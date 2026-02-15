@@ -355,6 +355,39 @@
     .section { display: none; }
     .section.active { display: block; }
 
+    /* Action buttons */
+    .action-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .action-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .scrape-btn {
+      background: #1a3a1a;
+      color: #2ed573;
+      border: 1px solid #2ed573;
+    }
+    .scrape-btn:hover:not(:disabled) {
+      background: #2a4a2a;
+    }
+    .check-btn {
+      background: #1a2a3a;
+      color: #4a9eff;
+      border: 1px solid #4a9eff;
+    }
+    .check-btn:hover:not(:disabled) {
+      background: #2a3a4a;
+    }
+
     /* Pipeline placeholder */
     .pipeline-placeholder {
       background: #111;
@@ -438,6 +471,8 @@
           </svg>
           <input type="text" class="search-box" id="active-search" placeholder="Search companies, banks, year (e.g. 2024)...">
         </div>
+        <button class="action-btn scrape-btn" id="scrape-oc-btn" onclick="triggerScrapeOC()" title="Scrape HKEX for new OC announcements">Scrape OC</button>
+        <button class="action-btn check-btn" id="check-listings-btn" onclick="triggerCheckListings()" title="Check if any active deals have listed">Check Listings</button>
         <div class="toolbar-spacer"></div>
         <span class="count-badge" id="active-count-badge">Loading...</span>
       </div>
@@ -563,43 +598,44 @@
       });
     });
 
-    // Load enriched CSV data (already grouped by deal)
+    // Load historical deals from API
     async function loadData() {
       try {
-        const response = await fetch('/baseline-enriched.csv');
-        const text = await response.text();
-        const lines = text.replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n');
-        const headers = parseCSVLine(lines[0]);
+        const response = await fetch('/api/ipo/deals?status=listed&limit=2000');
+        const json = await response.json();
 
-        allData = [];
-        for (let i = 1; i < lines.length; i++) {
-          if (!lines[i].trim()) continue;
-          const values = parseCSVLine(lines[i]);
-          const row = {};
-          headers.forEach((h, idx) => {
-            row[h] = values[idx] || '';
-          });
+        allData = (json.deals || []).map(d => {
+          // Extract sponsors and others from banks array
+          const banks = d.banks || [];
+          const sponsors = banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
+          const others = banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
 
-          // Parse enriched format
-          allData.push({
-            ticker: row.ticker,
-            company: row.company,
-            companyCn: row.company_cn || '',
-            type: row.type,
-            date: row.date,
-            dealType: row.deal_type || '',
-            shares: parseFloat(row.shares) || null,
-            price: parseFloat(row.price_hkd) || null,
-            sizeHKDm: isNaN(parseFloat(row.size_hkdm)) ? (row.size_hkdm || null) : parseFloat(row.size_hkdm),
-            industry: row.industry || '',
-            subIndustry: row.sub_industry || '',
-            sector: row.sector || '',
-            isDualListing: row.is_dual_listing === 'Y',
-            sponsors: row.sponsors ? row.sponsors.split('; ').filter(Boolean) : [],
-            others: row.others ? row.others.split('; ').filter(Boolean) : [],
-            prospectusUrl: row.prospectus_url || ''
-          });
-        }
+          // Format listing date from YYYY-MM-DD to DD/MM/YYYY for existing sort/display code
+          let dateStr = '';
+          if (d.listing_date) {
+            const parts = d.listing_date.split('-');
+            if (parts.length === 3) dateStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
+          }
+
+          return {
+            ticker: d.stock_code || '',
+            company: d.company_name || '',
+            companyCn: d.company_name_cn || '',
+            type: d.deal_type || '',
+            date: dateStr,
+            dealType: d.deal_type || '',
+            shares: parseFloat(d.shares_offered) || null,
+            price: parseFloat(d.price_hkd) || null,
+            sizeHKDm: d.size_hkdm != null ? parseFloat(d.size_hkdm) : null,
+            industry: d.industry || '',
+            subIndustry: d.sub_industry || '',
+            sector: d.sector || '',
+            isDualListing: d.is_dual_listing || false,
+            sponsors,
+            others,
+            prospectusUrl: d.prospectus_url || (d.pdf_links && d.pdf_links[0]) || ''
+          };
+        });
 
         populateYearFilter();
         updateTabCounts();
@@ -612,31 +648,32 @@
       }
     }
 
-    // Load active deals CSV
+    // Load active deals from API
     async function loadActiveData() {
       try {
-        const response = await fetch('/active-deals.csv');
-        const text = await response.text();
-        const lines = text.replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n');
-        const headers = parseCSVLine(lines[0]);
+        const response = await fetch('/api/ipo/deals?status=active&limit=500');
+        const json = await response.json();
 
-        activeData = [];
-        for (let i = 1; i < lines.length; i++) {
-          if (!lines[i].trim()) continue;
-          const values = parseCSVLine(lines[i]);
-          const row = {};
-          headers.forEach((h, idx) => {
-            row[h] = values[idx] || '';
-          });
+        activeData = (json.deals || []).map(d => {
+          const banks = d.banks || [];
+          const sponsors = banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
+          const others = banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
 
-          activeData.push({
-            company: row.company,
-            ocDate: row.oc_date,
-            sponsors: row.sponsors ? row.sponsors.split('; ').filter(Boolean) : [],
-            others: row.others ? row.others.split('; ').filter(Boolean) : [],
-            documentUrl: row.document_url || ''
-          });
-        }
+          // Format filing date from YYYY-MM-DD to DD/MM/YYYY
+          let dateStr = '';
+          if (d.filing_date) {
+            const parts = d.filing_date.split('-');
+            if (parts.length === 3) dateStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
+          }
+
+          return {
+            company: d.company_name || '',
+            ocDate: dateStr,
+            sponsors,
+            others,
+            documentUrl: (d.pdf_links && d.pdf_links[0]) || ''
+          };
+        });
 
         populateActiveYearFilter();
         updateTabCounts();
@@ -646,31 +683,6 @@
         document.getElementById('active-table-body').innerHTML =
           `<tr><td colspan="${activeColumns.length}" class="empty-state">Failed to load active deals</td></tr>`;
       }
-    }
-
-    function parseCSVLine(line) {
-      const result = [];
-      let current = '';
-      let inQuotes = false;
-
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          if (inQuotes && line[i + 1] === '"') {
-            current += '"';
-            i++;
-          } else {
-            inQuotes = !inQuotes;
-          }
-        } else if (char === ',' && !inQuotes) {
-          result.push(current);
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      result.push(current);
-      return result;
     }
 
     function updateTabCounts() {
@@ -1209,6 +1221,80 @@
       a.download = `ipo-deals-${new Date().toISOString().slice(0,10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    // ========== ACTION BUTTONS ==========
+
+    function pollScrapeRun(runId, onComplete) {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/ipo/scrape-runs/${runId}`);
+          const run = await res.json();
+          if (run.status === 'completed' || run.status === 'failed') {
+            clearInterval(interval);
+            onComplete(run);
+          }
+        } catch (err) {
+          console.error('Poll error:', err);
+          clearInterval(interval);
+          onComplete({ status: 'failed', errors: { error: String(err) } });
+        }
+      }, 5000);
+    }
+
+    async function triggerScrapeOC() {
+      const btn = document.getElementById('scrape-oc-btn');
+      btn.disabled = true;
+      btn.textContent = 'Scraping...';
+
+      try {
+        const res = await fetch('/api/ipo/scrape-oc', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.runId) {
+          pollScrapeRun(data.runId, (run) => {
+            btn.disabled = false;
+            if (run.status === 'completed') {
+              btn.textContent = `Done! ${run.new_deals || 0} new`;
+              loadActiveData();
+              setTimeout(() => { btn.textContent = 'Scrape OC'; }, 3000);
+            } else {
+              btn.textContent = 'Failed';
+              setTimeout(() => { btn.textContent = 'Scrape OC'; }, 3000);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Scrape trigger error:', err);
+        btn.disabled = false;
+        btn.textContent = 'Scrape OC';
+      }
+    }
+
+    async function triggerCheckListings() {
+      const btn = document.getElementById('check-listings-btn');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+
+      try {
+        const res = await fetch('/api/ipo/check-listings', { method: 'POST' });
+        const data = await res.json();
+
+        btn.disabled = false;
+        const matches = data.matches || [];
+        if (matches.length > 0) {
+          btn.textContent = `${matches.length} listed!`;
+          loadActiveData();
+          loadData();
+        } else {
+          btn.textContent = 'No new listings';
+        }
+        setTimeout(() => { btn.textContent = 'Check Listings'; }, 3000);
+      } catch (err) {
+        console.error('Check listings error:', err);
+        btn.disabled = false;
+        btn.textContent = 'Check Listings';
+      }
     }
 
     // Initialize
