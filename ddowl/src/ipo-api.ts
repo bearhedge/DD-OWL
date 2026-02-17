@@ -478,7 +478,7 @@ ipoRouter.post('/scrape-oc', async (req: Request, res: Response) => {
     (async () => {
       try {
         const { scrapeAllApplications, closeBrowser } = await import('./hkex-scraper-v2.js');
-        const deals = await scrapeAllApplications({ years: [2025, 2024], extractBanks: true });
+        const deals = await scrapeAllApplications({ years: [2026, 2025], extractBanks: true });
 
         let newDeals = 0;
         let newAppointments = 0;

@@ -298,7 +298,7 @@ export async function scrapeAllApplications(options: {
   extractBanks?: boolean;
 } = {}): Promise<ScrapedDeal[]> {
   const {
-    years = [2025, 2024],
+    years = [2026, 2025],
     boards = ['mainBoard'],
     limit = 0,
     extractBanks = true,
@@ -372,13 +372,12 @@ export async function scrapeAllApplications(options: {
 /**
  * Save scraped deals to database
  */
-export async function saveToDatabase(deals: ScrapedDeal[], dbUrl: string): Promise<{
+export async function saveToDatabase(deals: ScrapedDeal[], pool: InstanceType<typeof Pool>): Promise<{
   newCompanies: number;
   newDeals: number;
   newBanks: number;
   newAppointments: number;
 }> {
-  const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
 
   let newCompanies = 0;
   let newDeals = 0;
@@ -482,7 +481,7 @@ export async function saveToDatabase(deals: ScrapedDeal[], dbUrl: string): Promi
       }
     }
   } finally {
-    await pool.end();
+    // Pool is owned by the caller — don't end it here
   }
 
   return { newCompanies, newDeals, newBanks, newAppointments };
@@ -495,29 +494,33 @@ export async function runFullScrape(dbUrl: string): Promise<void> {
   console.log('=== HKEX Full Scrape ===\n');
 
   const startTime = Date.now();
+  const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
 
-  // Scrape 2024 + 2025, Main Board only (for now)
-  const deals = await scrapeAllApplications({
-    years: [2025, 2024],
-    boards: ['mainBoard'],
-    extractBanks: true,
-  });
+  try {
+    // Scrape 2025 + 2026, Main Board only (for now)
+    const deals = await scrapeAllApplications({
+      years: [2026, 2025],
+      boards: ['mainBoard'],
+      extractBanks: true,
+    });
 
-  console.log(`\nScraped ${deals.length} deals`);
-  console.log(`Total banks found: ${deals.reduce((sum, d) => sum + d.banks.length, 0)}`);
+    console.log(`\nScraped ${deals.length} deals`);
+    console.log(`Total banks found: ${deals.reduce((sum, d) => sum + d.banks.length, 0)}`);
 
-  // Save to database
-  console.log('\nSaving to database...');
-  const stats = await saveToDatabase(deals, dbUrl);
+    // Save to database
+    console.log('\nSaving to database...');
+    const stats = await saveToDatabase(deals, pool);
 
-  console.log(`\n=== Results ===`);
-  console.log(`New companies: ${stats.newCompanies}`);
-  console.log(`New deals: ${stats.newDeals}`);
-  console.log(`New banks: ${stats.newBanks}`);
-  console.log(`New appointments: ${stats.newAppointments}`);
-  console.log(`\nTime: ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
-
-  await closeBrowser();
+    console.log(`\n=== Results ===`);
+    console.log(`New companies: ${stats.newCompanies}`);
+    console.log(`New deals: ${stats.newDeals}`);
+    console.log(`New banks: ${stats.newBanks}`);
+    console.log(`New appointments: ${stats.newAppointments}`);
+    console.log(`\nTime: ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+  } finally {
+    await pool.end();
+    await closeBrowser();
+  }
 }
 
 // CLI
