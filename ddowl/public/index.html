@@ -1068,6 +1068,25 @@
       color: #4a9eff;
     }
 
+    .lang-checkbox {
+      width: 14px;
+      height: 14px;
+      border: 1.5px solid #555;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: transparent;
+      flex-shrink: 0;
+    }
+
+    .lang-checkbox.checked {
+      background: #4a9eff;
+      border-color: #4a9eff;
+      color: #fff;
+    }
+
     /* Further Links Button & Modal */
     .btn-further-links {
       padding: 12px 20px;
@@ -1749,7 +1768,7 @@
               <input
                 type="text"
                 class="variation-input"
-                placeholder="e.g., Chan Tai Man (English name)"
+                placeholder="e.g., Chan Tai Man"
                 style="flex: 1;"
               >
               <button type="button" onclick="removeVariation(this)" style="padding: 10px 14px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #666; cursor: pointer; font-size: 16px;" title="Remove">×</button>
@@ -2525,7 +2544,9 @@
         });
       }
 
-      selectedLanguage = next.language || 'chinese';
+      const langStr = next.language || 'chinese';
+      selectedLanguages = langStr.split(',').map(l => l.trim()).filter(Boolean);
+      updateLangButtonText();
 
       // Start screening
       startScreening();
@@ -2762,20 +2783,39 @@
       { code: 'arabic', name: 'العربية', enabled: true },
     ];
 
-    let selectedLanguage = 'chinese';
+    let selectedLanguages = ['chinese'];
+
+    function updateLangButtonText() {
+      const names = selectedLanguages.map(code => {
+        const lang = LANGUAGES.find(l => l.code === code);
+        return lang ? lang.name : code;
+      });
+      const el = document.getElementById('selectedLangName');
+      if (names.length <= 2) {
+        el.textContent = names.join(', ');
+      } else {
+        el.textContent = `${names.length} languages`;
+      }
+    }
 
     function toggleLanguageDropdown(e) {
       e.stopPropagation();
       document.getElementById('languageSelector').classList.toggle('open');
     }
 
-    function selectLanguage(code) {
+    function toggleLanguage(code) {
       const lang = LANGUAGES.find(l => l.code === code);
       if (!lang || !lang.enabled) return;
 
-      selectedLanguage = code;
-      document.getElementById('selectedLangName').textContent = lang.name;
-      document.getElementById('languageSelector').classList.remove('open');
+      const idx = selectedLanguages.indexOf(code);
+      if (idx >= 0) {
+        // Don't allow deselecting the last language
+        if (selectedLanguages.length <= 1) return;
+        selectedLanguages.splice(idx, 1);
+      } else {
+        selectedLanguages.push(code);
+      }
+      updateLangButtonText();
       renderLanguageList();
     }
 
@@ -2789,14 +2829,17 @@
         l.name.toLowerCase().includes(filter) || l.code.includes(filter)
       );
 
-      list.innerHTML = filtered.map(lang => `
-        <div class="lang-option ${lang.code === selectedLanguage ? 'selected' : ''} ${!lang.enabled ? 'disabled' : ''}"
-             onclick="${lang.enabled ? `selectLanguage('${lang.code}')` : ''}">
+      list.innerHTML = filtered.map(lang => {
+        const isSelected = selectedLanguages.includes(lang.code);
+        return `
+        <div class="lang-option ${isSelected ? 'selected' : ''} ${!lang.enabled ? 'disabled' : ''}"
+             onclick="${lang.enabled ? `toggleLanguage('${lang.code}')` : ''}">
+          <span class="lang-checkbox ${isSelected ? 'checked' : ''}">${isSelected ? '✓' : ''}</span>
           <span class="lang-label">${lang.name}</span>
           ${!lang.enabled ? '<span class="lang-badge">soon</span>' : ''}
-          ${lang.code === selectedLanguage ? '<span class="lang-check">✓</span>' : ''}
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
 
     // Close dropdown when clicking outside
@@ -3402,7 +3445,7 @@
 
       // Start SSE connection with existing sessionId
       const variations = [savedName];
-      const language = selectedLanguage;
+      const language = selectedLanguages.join(',');
 
       // Retry state
       let retryCount = 0;
@@ -3918,7 +3961,7 @@
     function addToQueue() {
       const name = document.getElementById('nameInput').value.trim();
       const variations = getVariations();
-      const language = selectedLanguage;
+      const language = selectedLanguages.join(',');
 
       if (name.length < 2) {
         alert('Please enter a valid name (2+ characters)');
@@ -3946,7 +3989,7 @@
     function startScreening() {
       const name = document.getElementById('nameInput').value.trim();
       const additionalVariations = getVariations();
-      const language = selectedLanguage;
+      const language = selectedLanguages.join(',');
 
       if (name.length < 2) {
         alert('Please enter a valid name (2+ characters)');
@@ -4075,7 +4118,7 @@
             SessionHistory.save({
               sessionId: sessionId,
               subjectName: name,
-              language: selectedLanguage,
+              language: selectedLanguages.join(','),
               startTime: Date.now(),
               status: 'in_progress',
               phase: 'gather'
@@ -5094,6 +5137,7 @@
             findings: currentFindings,
             nameVariations: currentNameVariations,
             cleanResults: currentCleanResults,
+            sessionId: sessionId || localStorage.getItem('ddowl_sessionId'),
           })
         });
 

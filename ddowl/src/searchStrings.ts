@@ -34,6 +34,34 @@ export function isChineseName(name: string): boolean {
   return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(name);
 }
 
+// Smart script detection: maps Unicode ranges to language codes
+export function detectScript(name: string): string {
+  // CJK Unified Ideographs + Extension A
+  if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(name)) return 'chinese';
+  // Hangul Syllables + Jamo
+  if (/[\uac00-\ud7af\u1100-\u11ff]/.test(name)) return 'korean';
+  // Hiragana + Katakana
+  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(name)) return 'japanese';
+  // Thai
+  if (/[\u0e01-\u0e5b]/.test(name)) return 'thai';
+  // Khmer
+  if (/[\u1780-\u17ff]/.test(name)) return 'khmer';
+  // Myanmar
+  if (/[\u1000-\u109f]/.test(name)) return 'burmese';
+  // Lao
+  if (/[\u0e80-\u0eff]/.test(name)) return 'lao';
+  // Devanagari
+  if (/[\u0900-\u097f]/.test(name)) return 'hindi';
+  // Tamil
+  if (/[\u0b80-\u0bff]/.test(name)) return 'tamil';
+  // Arabic
+  if (/[\u0600-\u06ff\u0750-\u077f]/.test(name)) return 'arabic';
+  // Cyrillic
+  if (/[\u0400-\u04ff]/.test(name)) return 'russian';
+  // Latin (fallback)
+  return 'english';
+}
+
 // Category names for logging (maps template index to human-readable name)
 // Legacy mapping for Chinese+English (backwards compat with existing logs)
 export const TEMPLATE_CATEGORIES: Record<number, string> = {

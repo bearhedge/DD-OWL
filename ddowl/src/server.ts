@@ -22,7 +22,7 @@ import cors from 'cors';
 import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
-import { SEARCH_TEMPLATES, CHINESE_TEMPLATES, ENGLISH_TEMPLATES, SITE_TEMPLATES, ENGLISH_SITE_TEMPLATES, TEMPLATE_CATEGORIES, buildSearchQuery, isChineseName, LANGUAGE_CONFIG } from './searchStrings.js';
+import { SEARCH_TEMPLATES, CHINESE_TEMPLATES, ENGLISH_TEMPLATES, SITE_TEMPLATES, ENGLISH_SITE_TEMPLATES, TEMPLATE_CATEGORIES, buildSearchQuery, isChineseName, detectScript, LANGUAGE_CONFIG } from './searchStrings.js';
 import { searchAllPages, searchAllEngines, SearchProgressCallback, searchAll, BatchSearchResult, searchGoogle } from './searcher.js';
 import { getSerperKeyManager } from './serperKeyManager.js';
 import { isBaiduAvailable } from './baiduSearcher.js';
@@ -50,7 +50,7 @@ import { eliminateObviousNoise, getEliminationBreakdown, EliminationResult, Elim
 import { getChineseVariantsLLM } from './utils/chinese.js';
 import { createSession, getSession, updateSession, deleteSession, ScreeningSession, DetectedCompany } from './session-store.js';
 import { clusterByIncidentLLM, ClusteringResult, ClusterProgressCallback, IncidentCluster } from './deduplicator.js';
-import { initReportsDb, saveReport as saveReportToDb, type CleanEntityResult } from './reports-db.js';
+import { initReportsDb, saveReport as saveReportToDb, saveReportMarkdown, type CleanEntityResult } from './reports-db.js';
 import { reportsRouter } from './reports-api.js';
 // URL validation to filter out corrupted URLs (e.g., Baidu tracking URLs)
 function isValidUrl(url: string): boolean {
@@ -1071,7 +1071,12 @@ app.get('/api/screen/v3', async (req: Request, res: Response) => {
 app.get('/api/screen/v4', async (req: Request, res: Response) => {
   const subjectName = req.query.name as string;
   const variationsParam = req.query.variations as string;
-  const language = (req.query.language as string) || 'both';
+  const languageParam = (req.query.language as string) || 'chinese';
+  const languages = languageParam.split(',').map(l => l.trim()).filter(Boolean);
+  // Backward compat: 'both' → ['chinese', 'english']
+  if (languages.length === 1 && languages[0] === 'both') {
+    languages.splice(0, 1, 'chinese', 'english');
+  }
   const incomingSessionId = req.query.sessionId as string;
   const lastSeenBatch = parseInt(req.query.lastBatch as string) || 0;
   const lastSeenArticle = parseInt(req.query.lastArticle as string) || 0;
@@ -1196,7 +1201,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
   // For Chinese language: auto-generate Simplified/Traditional variants using DeepSeek LLM
   // Skip on reconnect — variants are already stored in the session
   // Only run LLM on Chinese names (not English name variations)
-  if (!existingSession && (language === 'chinese' || language === 'both')) {
+  if (!existingSession && languages.includes('chinese')) {
     const currentNames = [...nameVariations].filter(n => isChineseName(n));
     for (const name of currentNames) {
       const variants = await getChineseVariantsLLM(name);
@@ -1213,10 +1218,6 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
     nameVariations.push(...existingSession.variations);
   }
 
-  // Split name variants by script (Chinese vs English)
-  const chineseNames = nameVariations.filter(n => isChineseName(n));
-  const englishNames = nameVariations.filter(n => !isChineseName(n));
-
   // Build per-language template entries: each entry has template, names, and hl
   interface TemplateEntry {
     template: string;
@@ -1226,37 +1227,61 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
 
   const templateEntries: TemplateEntry[] = [];
 
-  if (language === 'both' || language === 'chinese') {
-    // Legacy behavior: split by script, Chinese names → Chinese templates, English names → English templates
-    if (chineseNames.length > 0) {
-      const cfg = LANGUAGE_CONFIG['chinese'];
-      for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
-        templateEntries.push({ template: t, names: chineseNames, hl: cfg.hl });
+  // Step 1: For each explicitly selected language, add templates with appropriate names
+  for (const lang of languages) {
+    const cfg = LANGUAGE_CONFIG[lang];
+    if (!cfg) continue;
+
+    if (lang === 'chinese') {
+      // Chinese templates only for CJK names
+      const cjkNames = nameVariations.filter(n => isChineseName(n));
+      if (cjkNames.length > 0) {
+        for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
+          templateEntries.push({ template: t, names: cjkNames, hl: cfg.hl });
+        }
       }
-    }
-    if (englishNames.length > 0) {
-      const cfg = LANGUAGE_CONFIG['english'];
-      for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
-        templateEntries.push({ template: t, names: englishNames, hl: cfg.hl });
+    } else if (lang === 'english') {
+      // English templates only for non-CJK names
+      const nonCjkNames = nameVariations.filter(n => !isChineseName(n));
+      if (nonCjkNames.length > 0) {
+        for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
+          templateEntries.push({ template: t, names: nonCjkNames, hl: cfg.hl });
+        }
       }
-    }
-  } else {
-    // Specific language selected: use that language's templates for all names
-    const cfg = LANGUAGE_CONFIG[language];
-    if (cfg) {
+    } else {
+      // Other languages: use templates for ALL name variations
       for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
         templateEntries.push({ template: t, names: nameVariations, hl: cfg.hl });
       }
     }
-    // Also add English templates if the selected language isn't English
-    // (subjects often have English-language media coverage too)
-    if (language !== 'english') {
-      const engNames = nameVariations.filter(n => !isChineseName(n));
-      if (engNames.length > 0) {
-        const engCfg = LANGUAGE_CONFIG['english'];
-        for (const t of [...engCfg.templates, ...engCfg.siteTemplates]) {
-          templateEntries.push({ template: t, names: engNames, hl: 'en' });
-        }
+  }
+
+  // Step 2: Auto-detect scripts from name variations and add missing language templates
+  const detectedLangs = new Set<string>();
+  for (const name of nameVariations) {
+    detectedLangs.add(detectScript(name));
+  }
+  for (const detected of detectedLangs) {
+    if (languages.includes(detected)) continue; // Already explicitly selected
+    if (detected === 'english') continue; // Handled in step 3
+    const cfg = LANGUAGE_CONFIG[detected];
+    if (!cfg) continue;
+    // Only apply to names matching this script
+    const matchingNames = nameVariations.filter(n => detectScript(n) === detected);
+    if (matchingNames.length > 0) {
+      for (const t of [...cfg.templates, ...cfg.siteTemplates]) {
+        templateEntries.push({ template: t, names: matchingNames, hl: cfg.hl });
+      }
+    }
+  }
+
+  // Step 3: Auto-include English for Latin-script names if not explicitly selected
+  if (!languages.includes('english')) {
+    const latinNames = nameVariations.filter(n => detectScript(n) === 'english');
+    if (latinNames.length > 0) {
+      const engCfg = LANGUAGE_CONFIG['english'];
+      for (const t of [...engCfg.templates, ...engCfg.siteTemplates]) {
+        templateEntries.push({ template: t, names: latinNames, hl: 'en' });
       }
     }
   }
@@ -1453,7 +1478,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
       await createSession(sessionId, {
         name: subjectName,
         variations: nameVariations,
-        language,
+        language: languageParam,
         gatheredResults: [],
         categorized: { red: [], amber: [], green: [] },
         passedElimination: [],
@@ -1535,9 +1560,11 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
       console.log(`[V4] Skipped gather phase, using ${allResults.length} restored results`);
     } else {
       const totalSearches = selectedTemplates.length - gatherStartIndex;
+      const cjkNames = nameVariations.filter(n => isChineseName(n));
+      const nonCjkNames = nameVariations.filter(n => !isChineseName(n));
       const nameDisplay: string[] = [];
-      if (chineseNames.length > 0) nameDisplay.push(`${chineseNames.length} Chinese (${chineseNames.join(', ')})`);
-      if (englishNames.length > 0) nameDisplay.push(`${englishNames.length} English (${englishNames.join(', ')})`);
+      if (cjkNames.length > 0) nameDisplay.push(`${cjkNames.length} Chinese (${cjkNames.join(', ')})`);
+      if (nonCjkNames.length > 0) nameDisplay.push(`${nonCjkNames.length} English (${nonCjkNames.join(', ')})`);
       const nameVariantsDisplay = nameDisplay.length > 0 ? nameDisplay.join(' + ') : nameVariations[0];
       const resumeInfo = gatherStartIndex > 0 ? ` (resuming from query ${gatherStartIndex + 1})` : '';
       sendEvent({
@@ -2845,7 +2872,7 @@ If you cannot determine a field with reasonable confidence, use the default empt
         runId: stableRunId,
         subjectName,
         screenedAt: metrics.startTime,
-        language: language || 'zh',
+        language: languageParam || 'zh',
         nameVariations: nameVariations || [],
         findings: consolidatedFindings.map((f: ConsolidatedFinding) => ({
           severity: f.severity as 'RED' | 'AMBER' | 'REVIEW',
@@ -3509,7 +3536,7 @@ app.get('/api/report/person', async (req: Request, res: Response) => {
 
 // API endpoint to generate DD write-up report with streaming
 app.post('/api/report/generate', async (req: Request, res: Response) => {
-  const { subjectName, findings, cleanResults: reqCleanResults, nameVariations: reqNameVariations } = req.body;
+  const { subjectName, findings, cleanResults: reqCleanResults, nameVariations: reqNameVariations, sessionId: reqSessionId } = req.body;
 
   if (!subjectName || !findings || !Array.isArray(findings)) {
     res.status(400).json({ error: 'subjectName and findings array required' });
@@ -3526,7 +3553,11 @@ app.post('/api/report/generate', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering for real-time SSE
   res.flushHeaders();
 
+  // Accumulate full markdown for DB persistence
+  let fullMarkdown = '';
+
   const sendChunk = (content: string) => {
+    fullMarkdown += content;
     res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
   };
 
@@ -3548,6 +3579,16 @@ app.post('/api/report/generate', async (req: Request, res: Response) => {
     console.log(`[REPORT] Starting report generation for ${subjectName} with ${findings.length} findings, ${Object.keys(cleanResults).length} clean entities`);
 
     await generateFullReport(subjectName, findings as ConsolidatedFinding[], cleanResults, nameVariations, sendChunk);
+
+    // Save generated markdown to reports DB (sessionId = run_id)
+    if (reqSessionId && fullMarkdown) {
+      try {
+        await saveReportMarkdown(reqSessionId, fullMarkdown);
+        console.log(`[REPORT] Saved report markdown to DB for session ${reqSessionId} (${fullMarkdown.length} chars)`);
+      } catch (dbErr) {
+        console.error('[REPORT] Failed to save markdown to DB:', dbErr);
+      }
+    }
 
     clearInterval(heartbeat);
     res.write(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);

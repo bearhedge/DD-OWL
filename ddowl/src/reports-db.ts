@@ -316,6 +316,10 @@ export async function saveEditedReport(reportId: number, editedMarkdown: string)
     [editedMarkdown, distance, reportId]);
 }
 
+export async function saveReportMarkdown(runId: string, markdown: string): Promise<void> {
+  await pool.query('UPDATE dd_reports SET report_markdown = $1 WHERE run_id = $2', [markdown, runId]);
+}
+
 export async function setQualityRating(id: number, rating: number): Promise<void> {
   await pool.query('UPDATE dd_reports SET quality_rating = $1 WHERE id = $2', [rating, id]);
 }

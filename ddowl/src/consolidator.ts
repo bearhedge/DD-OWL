@@ -500,7 +500,44 @@ function getHighestSeverity(findings: RawFinding[]): 'RED' | 'AMBER' {
 }
 
 /**
+ * Pick the best finding from a cluster — no LLM re-synthesis.
+ * Selection: (1) highest severity, (2) not fetchFailed, (3) longest summary.
+ */
+function pickBestFinding(findings: RawFinding[]): ConsolidatedFinding {
+  const severityScore: Record<string, number> = { 'RED': 3, 'AMBER': 2, 'REVIEW': 1 };
+
+  const scored = findings.map(f => ({
+    finding: f,
+    score: (severityScore[f.severity] || 0) * 1000
+      + (f.fetchFailed ? 0 : 500)
+      + (f.summary?.length || 0)
+  }));
+  scored.sort((a, b) => b.score - a.score);
+
+  const best = scored[0].finding;
+  const allSources = scored.map(({ finding: f }) => ({ url: f.url, title: f.title }));
+  const articleContents = findings
+    .filter(f => f.articleContent)
+    .map(f => ({ url: f.url, content: f.articleContent! }));
+  const fp = best.fingerprint || extractFingerprint(best.headline, best.summary);
+
+  return {
+    headline: best.headline,
+    summary: best.summary,
+    severity: getHighestSeverity(findings),
+    eventType: fp.eventType || 'other',
+    dateRange: fp.years.join('-') || '',
+    sourceCount: allSources.length,
+    sources: allSources,
+    clusterId: best.clusterId,
+    clusterLabel: best.clusterLabel,
+    articleContents: articleContents.length > 0 ? articleContents : undefined,
+  };
+}
+
+/**
  * Consolidate a group of similar findings using LLM
+ * (Kept as dead code for rollback safety)
  */
 async function consolidateGroupWithLLM(
   findings: RawFinding[],
@@ -668,41 +705,30 @@ export async function consolidateFindings(
     const parkedSources = clusterId ? (parkedByCluster.get(clusterId) || []) : [];
 
     if (groupWithFp.length === 1) {
-      // Single finding - no LLM consolidation needed, but add parked sources
+      // Single finding - no consolidation needed
       const f = groupWithFp[0];
-      const allSources = [
-        { url: f.url, title: f.title },
-        ...parkedSources
-      ];
+      const analyzedSources = [{ url: f.url, title: f.title }];
       consolidated.push({
         headline: f.headline,
         summary: f.summary,
         severity: f.severity,
         eventType: f.fingerprint?.eventType || 'other',
         dateRange: f.fingerprint?.years.join('-') || '',
-        sourceCount: allSources.length,
-        sources: allSources,
+        sourceCount: analyzedSources.length,
+        sources: analyzedSources,
         clusterId: f.clusterId,
         clusterLabel: f.clusterLabel,
         articleContents: f.articleContent ? [{ url: f.url, content: f.articleContent }] : undefined,
+        relatedLinks: parkedSources.length > 0 ? parkedSources : undefined,
       });
     } else {
-      // Multiple findings - consolidate with LLM
+      // Multiple findings - pick best (no LLM re-synthesis to avoid hallucination)
       const label = groupWithFp[0].clusterLabel || 'same incident';
-      console.log(`[CONSOLIDATE] Merging ${groupWithFp.length} findings about "${label}"`);
-      const merged = await consolidateGroupWithLLM(groupWithFp, subjectName);
-      // Add parked sources to merged finding
-      merged.sources = [...merged.sources, ...parkedSources];
-      merged.sourceCount = merged.sources.length;
-      // Preserve cluster info in consolidated result
-      merged.clusterId = groupWithFp[0].clusterId;
-      merged.clusterLabel = groupWithFp[0].clusterLabel;
-      // Carry article content from raw findings into consolidated finding
-      const articleContents = groupWithFp
-        .filter(f => f.articleContent)
-        .map(f => ({ url: f.url, content: f.articleContent! }));
-      if (articleContents.length > 0) {
-        merged.articleContents = articleContents;
+      console.log(`[CONSOLIDATE] Picking best of ${groupWithFp.length} findings about "${label}" (no LLM re-synthesis)`);
+      const merged = pickBestFinding(groupWithFp);
+      // Add parked sources as related links (not inflating sourceCount)
+      if (parkedSources.length > 0) {
+        merged.relatedLinks = parkedSources;
       }
       consolidated.push(merged);
     }

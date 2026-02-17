@@ -95,6 +95,7 @@ export interface ConsolidatedFinding {
   clusterId?: string;     // From Phase 2.5 incident clustering
   clusterLabel?: string;  // Incident description from clustering
   articleContents?: { url: string; content: string }[];  // Cached article texts from source findings
+  relatedLinks?: { url: string; title: string }[];  // Parked/duplicate articles (not counted in sourceCount)
 }
 
 // Subject profile built progressively during screening
