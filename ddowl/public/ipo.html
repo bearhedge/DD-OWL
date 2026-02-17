@@ -602,6 +602,7 @@
     async function loadData() {
       try {
         const response = await fetch('/api/ipo/deals?status=listed&limit=2000');
+        if (!response.ok) throw new Error(`API error: ${response.status}`);
         const json = await response.json();
 
         allData = (json.deals || []).map(d => {
@@ -652,6 +653,7 @@
     async function loadActiveData() {
       try {
         const response = await fetch('/api/ipo/deals?status=active&limit=500');
+        if (!response.ok) throw new Error(`API error: ${response.status}`);
         const json = await response.json();
 
         activeData = (json.deals || []).map(d => {

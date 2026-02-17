@@ -5,15 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import pg from 'pg';
-
-const { Pool } = pg;
-
-// Database connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:DOMRD7x7ECUny4Pc615y9w==@35.194.142.132:5432/ddowl',
-  ssl: { rejectUnauthorized: false },
-});
+import { pool } from './db/index.js';
 
 export const ipoRouter = Router();
 
