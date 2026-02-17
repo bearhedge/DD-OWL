@@ -167,3 +167,9 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await redis.del(`session:${sessionId}`);
   console.log(`[SESSION] Deleted session ${sessionId}`);
 }
+
+export async function deleteAllSessions(): Promise<void> {
+  const keys = await redis.keys('session:*');
+  if (keys.length > 0) await redis.del(...keys);
+  console.log(`[SESSION] Deleted all sessions (${keys.length} keys)`);
+}

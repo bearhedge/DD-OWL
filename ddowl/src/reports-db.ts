@@ -139,6 +139,17 @@ export interface Learnings {
   editDistanceTrend: { month: string; avg: number }[];
 }
 
+// --- Delete ---
+
+export async function deleteReport(id: number): Promise<void> {
+  await pool.query('DELETE FROM dd_reports WHERE id = $1', [id]);
+}
+
+export async function deleteAllReports(): Promise<void> {
+  await pool.query('DELETE FROM dd_reports');
+  await pool.query('DELETE FROM dd_sources');
+}
+
 // --- CRUD ---
 
 export async function saveReport(input: SaveReportInput): Promise<number> {

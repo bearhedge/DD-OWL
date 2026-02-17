@@ -4,8 +4,10 @@ import {
   updateFindingVerdict, addMissedFlag, saveEditedReport,
   setQualityRating, listChangelog, addChangelogEntry,
   getStats, getSourceRanking, getLearnings,
+  deleteReport, deleteAllReports,
   type SaveReportInput,
 } from './reports-db.js';
+import { deleteAllSessions } from './session-store.js';
 
 export const reportsRouter = Router();
 
@@ -20,6 +22,30 @@ reportsRouter.get('/', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[REPORTS API] Error listing reports:', err);
     res.status(500).json({ error: 'Failed to list reports' });
+  }
+});
+
+// DELETE /api/reports — clear all reports, sources, and sessions
+reportsRouter.delete('/', async (_req: Request, res: Response) => {
+  try {
+    await deleteAllReports();
+    await deleteAllSessions();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[REPORTS API] Error deleting all reports:', err);
+    res.status(500).json({ error: 'Failed to delete all reports' });
+  }
+});
+
+// DELETE /api/reports/:id — delete single report
+reportsRouter.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    await deleteReport(id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[REPORTS API] Error deleting report:', err);
+    res.status(500).json({ error: 'Failed to delete report' });
   }
 });
 
