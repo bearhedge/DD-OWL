@@ -103,48 +103,92 @@ function deduplicateResults<T extends { url: string }>(results: T[]): { unique: 
 }
 
 /**
- * Group results by similar titles to avoid analyzing the same story 20 times
- * Keeps max N per group, parks rest for manual review
+ * Extract Chinese characters from a title (for similarity comparison)
+ */
+function extractChineseChars(title: string): string {
+  return title
+    .replace(/[-_|–—].{0,20}$/, '')     // Remove site suffix
+    .replace(/[^\u4e00-\u9fff]/g, '');   // Keep only Chinese chars
+}
+
+/**
+ * Check if two Chinese titles are about the same story using bigram overlap.
+ * Requires ≥50% shared bigrams — catches "华住被约谈季琦" vs "季琦华住被约谈".
+ */
+function areSimilarChineseTitles(a: string, b: string): boolean {
+  if (a.length < 4 || b.length < 4) return a === b;
+
+  // Build bigram sets
+  const bigramsA = new Set<string>();
+  for (let i = 0; i < a.length - 1; i++) bigramsA.add(a.slice(i, i + 2));
+  const bigramsB = new Set<string>();
+  for (let i = 0; i < b.length - 1; i++) bigramsB.add(b.slice(i, i + 2));
+
+  // Count intersection
+  let shared = 0;
+  for (const bg of bigramsA) {
+    if (bigramsB.has(bg)) shared++;
+  }
+
+  const minSize = Math.min(bigramsA.size, bigramsB.size);
+  return minSize > 0 && (shared / minSize) >= 0.5;
+}
+
+/**
+ * Group results by similar titles to avoid analyzing the same story 20 times.
+ * Uses bigram overlap for Chinese titles (catches reworded duplicates).
+ * Keeps max N per group, parks rest for manual review.
  */
 function groupByTitleSimilarity<T extends { title: string; url: string }>(
   results: T[],
   maxPerGroup: number = 5
 ): { toAnalyze: T[]; parked: T[] } {
-  const groups = new Map<string, T[]>();
+  // Each group: { key: string, chars: string, items: T[] }
+  const groups: { chars: string; items: T[] }[] = [];
 
   for (const result of results) {
-    // Normalize: remove site suffix (after - | _), keep first 15 Chinese chars
-    const normalized = result.title
-      .replace(/[-_|].*$/, '')           // Remove site suffix
-      .replace(/[^\u4e00-\u9fff]/g, '')  // Keep only Chinese chars
-      .slice(0, 15);                      // First 15 chars
+    const chars = extractChineseChars(result.title);
 
-    // Skip if no Chinese chars (likely English or garbage)
-    if (normalized.length < 3) {
-      // Use URL domain as fallback key for non-Chinese titles
+    // Non-Chinese titles: use domain+prefix as before
+    if (chars.length < 3) {
       try {
         const domain = new URL(result.url).hostname;
-        const fallbackKey = `_domain_${domain}_${result.title.slice(0, 20)}`;
-        if (!groups.has(fallbackKey)) groups.set(fallbackKey, []);
-        groups.get(fallbackKey)!.push(result);
+        const fallbackKey = `${domain}_${result.title.slice(0, 20)}`;
+        const existing = groups.find(g => g.chars === fallbackKey);
+        if (existing) {
+          existing.items.push(result);
+        } else {
+          groups.push({ chars: fallbackKey, items: [result] });
+        }
       } catch {
-        // Invalid URL, put in misc bucket
-        if (!groups.has('_misc')) groups.set('_misc', []);
-        groups.get('_misc')!.push(result);
+        const misc = groups.find(g => g.chars === '_misc');
+        if (misc) misc.items.push(result);
+        else groups.push({ chars: '_misc', items: [result] });
       }
       continue;
     }
 
-    if (!groups.has(normalized)) groups.set(normalized, []);
-    groups.get(normalized)!.push(result);
+    // Chinese titles: find existing group with high bigram overlap
+    let matched = false;
+    for (const group of groups) {
+      if (group.chars.length >= 3 && areSimilarChineseTitles(chars, group.chars)) {
+        group.items.push(result);
+        matched = true;
+        break;
+      }
+    }
+
+    if (!matched) {
+      groups.push({ chars, items: [result] });
+    }
   }
 
   const toAnalyze: T[] = [];
   const parked: T[] = [];
 
-  for (const [, items] of groups) {
-    toAnalyze.push(...items.slice(0, maxPerGroup));
-    parked.push(...items.slice(maxPerGroup));
+  for (const group of groups) {
+    toAnalyze.push(...group.items.slice(0, maxPerGroup));
+    parked.push(...group.items.slice(maxPerGroup));
   }
 
   return { toAnalyze, parked };
@@ -2628,18 +2672,25 @@ If you cannot determine a field with reasonable confidence, use the default empt
     // ========================================
     let consolidatedFindings: ConsolidatedFinding[] = [];
 
+    // Separate unfetched content — these go to a separate "unverified" section
+    const verifiedFindings = allFindings.filter(f => !f.fetchFailed);
+    const unverifiedFindings = allFindings.filter(f => f.fetchFailed);
+    if (unverifiedFindings.length > 0) {
+      console.log(`[V4] Separated ${unverifiedFindings.length} unverified (content unavailable)`);
+    }
+
     if (skipConsolidate && restoredConsolidated) {
       // Restored from session - use existing consolidated findings
       consolidatedFindings = restoredConsolidated;
       console.log(`[V4] Skipped consolidate phase, using ${consolidatedFindings.length} restored findings`);
-    } else if (allFindings.length > 0) {
-      sendEvent({ type: 'phase', phase: 5, name: 'CONSOLIDATE', message: `Consolidating ${allFindings.length} findings...` });
+    } else if (verifiedFindings.length > 0) {
+      sendEvent({ type: 'phase', phase: 5, name: 'CONSOLIDATE', message: `Consolidating ${verifiedFindings.length} findings...` });
 
       // Update session to consolidate phase BEFORE starting (for reconnection tracking)
       await updateSession(sessionId, { currentPhase: 'consolidate' }, connectionId);
 
-      consolidatedFindings = await consolidateFindings(allFindings, subjectName, parkedArticles);
-      tracker.recordConsolidation(allFindings.length, consolidatedFindings.length);
+      consolidatedFindings = await consolidateFindings(verifiedFindings, subjectName, parkedArticles);
+      tracker.recordConsolidation(verifiedFindings.length, consolidatedFindings.length);
 
       // Store consolidated results in session (for reconnection)
       await updateSession(sessionId, { consolidatedFindings }, connectionId);
@@ -2737,6 +2788,12 @@ If you cannot determine a field with reasonable confidence, use the default empt
         durationMin: (totalDuration / 60000).toFixed(1),
       },
       findings: consolidatedFindings,
+      unverifiedFindings: unverifiedFindings.map(f => ({
+        url: f.url,
+        title: f.title,
+        originalCategory: f.triageClassification,
+        reason: f.summary,
+      })),
       nameVariations,
       cleanResults,
       profile: subjectProfile,

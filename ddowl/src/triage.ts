@@ -540,6 +540,49 @@ function isStockExchangeBoilerplate(item: { title: string; snippet: string; url:
 }
 
 /**
+ * Detect promotional/corporate content that contains regulatory keywords in neutral context.
+ * Catches conference announcements, business profiles, awards, interviews, etc.
+ * Only filters when NO enforcement/adverse keywords are present — safe by design.
+ */
+function isPromotionalContent(item: { title: string; snippet: string; url: string }): boolean {
+  const text = `${item.title} ${item.snippet || ''}`;
+
+  // Conference / forum / summit announcements
+  const conferencePatterns = [
+    '论坛', '峰会', '大会', '年会', '研讨会', '座谈会',
+    'conference', 'summit', 'forum', 'symposium',
+  ];
+
+  // Business profile / ranking / award content
+  const profilePatterns = [
+    '创业故事', '创始人故事', '企业家精神', '成功之道',
+    '排行榜', '富豪榜', '影响力人物', '年度人物', '风云人物',
+    '颁奖', '荣获', '获奖', '入选',
+    'award', 'ranking', 'top 100', 'entrepreneur',
+  ];
+
+  // Book / interview / speech content
+  const editorialPatterns = [
+    '新书', '著作', '专访', '對話', '对话', '演讲', '演講',
+    '心得', '感悟', '分享', 'interview', 'keynote', 'book',
+  ];
+
+  const allPatterns = [...conferencePatterns, ...profilePatterns, ...editorialPatterns];
+  const hasPromotionalSignal = allPatterns.some(p => text.toLowerCase().includes(p.toLowerCase()));
+  if (!hasPromotionalSignal) return false;
+
+  // Only filter if NO enforcement/adverse keywords are present
+  const adverseKeywords = [
+    '处罚', '罚款', '逮捕', '判刑', '诈骗', '洗钱', '行贿', '受贿',
+    '腐败', '贪污', '制裁', '黑名单', '起诉', '拘留',
+    'fraud', 'arrest', 'sanction', 'penalty', 'convicted', 'indicted',
+  ];
+  const hasAdverse = adverseKeywords.some(k => text.toLowerCase().includes(k.toLowerCase()));
+
+  return !hasAdverse;
+}
+
+/**
  * Combined check: is this URL irrelevant for DD screening?
  */
 function shouldSkipUrl(item: { title: string; snippet: string; url: string }): { skip: boolean; reason: string } {
@@ -556,6 +599,11 @@ function shouldSkipUrl(item: { title: string; snippet: string; url: string }): {
   // Check stock exchange regulatory filing boilerplate
   if (isStockExchangeBoilerplate(item)) {
     return { skip: true, reason: 'Stock exchange regulatory filing boilerplate' };
+  }
+
+  // Check promotional/corporate content (conferences, awards, interviews)
+  if (isPromotionalContent(item)) {
+    return { skip: true, reason: 'Promotional/corporate content' };
   }
 
   return { skip: false, reason: '' };
@@ -645,7 +693,15 @@ AMBER (investigate):
 
 GREEN: No adverse keywords, different person, neutral business news
 
-IMPORTANT: If title/snippet contains ANY of the above keywords about "${subjectName}", mark RED or AMBER accordingly. Do NOT mark GREEN if adverse keywords are present.
+IMPORTANT CONTEXT RULES:
+- Press releases, conference announcements, business profiles, investment reports, and award ceremonies are GREEN even if they mention regulatory terms in a business context
+- "监管" (regulation) in "regulatory overview" or "regulatory environment" is GREEN — it's descriptive, not enforcement
+- "证监会" in "filed with 证监会" or "approved by 证监会" is GREEN — routine filings
+- Only flag AMBER/RED when the keyword indicates ACTUAL misconduct, enforcement, or legal trouble targeting the subject
+- SEC/证监会 filings, prospectuses, and annual reports are routine corporate governance — mark GREEN
+- If the SAME incident appears multiple times from different sources, only the first mention matters — duplicates of the same story should get the same category
+
+If title/snippet contains adverse keywords about "${subjectName}" indicating ACTUAL enforcement or misconduct, mark RED or AMBER accordingly. Do NOT mark GREEN if genuine adverse keywords are present.
 
 RESULTS:
 ${resultsText}
