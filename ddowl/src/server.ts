@@ -3580,11 +3580,11 @@ app.post('/api/report/generate', async (req: Request, res: Response) => {
 
     await generateFullReport(subjectName, findings as ConsolidatedFinding[], cleanResults, nameVariations, sendChunk);
 
-    // Save generated markdown to reports DB (sessionId = run_id)
-    if (reqSessionId && fullMarkdown) {
+    // Save generated markdown to reports DB
+    if (fullMarkdown) {
       try {
-        await saveReportMarkdown(reqSessionId, fullMarkdown);
-        console.log(`[REPORT] Saved report markdown to DB for session ${reqSessionId} (${fullMarkdown.length} chars)`);
+        await saveReportMarkdown(reqSessionId || '', subjectName, fullMarkdown);
+        console.log(`[REPORT] Saved report markdown to DB for ${subjectName} (${fullMarkdown.length} chars)`);
       } catch (dbErr) {
         console.error('[REPORT] Failed to save markdown to DB:', dbErr);
       }

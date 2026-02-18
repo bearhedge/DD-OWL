@@ -316,8 +316,15 @@ export async function saveEditedReport(reportId: number, editedMarkdown: string)
     [editedMarkdown, distance, reportId]);
 }
 
-export async function saveReportMarkdown(runId: string, markdown: string): Promise<void> {
-  await pool.query('UPDATE dd_reports SET report_markdown = $1 WHERE run_id = $2', [markdown, runId]);
+export async function saveReportMarkdown(runId: string, subjectName: string, markdown: string): Promise<void> {
+  // Try by run_id first (exact session match), fall back to most recent report for this subject
+  const { rowCount } = await pool.query('UPDATE dd_reports SET report_markdown = $1 WHERE run_id = $2', [markdown, runId]);
+  if (rowCount && rowCount > 0) return;
+  // Fallback: update most recent report for this subject
+  await pool.query(
+    'UPDATE dd_reports SET report_markdown = $1 WHERE id = (SELECT id FROM dd_reports WHERE subject_name = $2 ORDER BY screened_at DESC LIMIT 1)',
+    [markdown, subjectName]
+  );
 }
 
 export async function setQualityRating(id: number, rating: number): Promise<void> {
