@@ -361,7 +361,7 @@ export async function getStats(): Promise<Stats> {
     SELECT
       (SELECT count(*) FROM dd_reports) as "totalReports",
       (SELECT count(DISTINCT r.id) FROM dd_reports r JOIN dd_findings f ON f.report_id = r.id WHERE f.human_verdict IS NOT NULL) as "reviewedReports",
-      (SELECT count(*) FROM dd_findings) as "totalFindings",
+      (SELECT COALESCE(SUM((screening_stats_json::jsonb->'consolidated'->>'after')::int), 0) FROM dd_reports WHERE screening_stats_json IS NOT NULL) as "totalFindings",
       (SELECT count(*) FROM dd_findings WHERE human_verdict = 'CONFIRMED') as confirmed,
       (SELECT count(*) FROM dd_findings WHERE human_verdict = 'WRONG') as wrong,
       (SELECT count(*) FROM dd_missed_flags) as missed,

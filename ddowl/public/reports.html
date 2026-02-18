@@ -556,12 +556,12 @@
           const reviewClass = r.edited_markdown ? 'reviewed' : (r.edit_distance != null ? 'pending' : 'unreviewed');
           const reviewText = r.edited_markdown ? 'Reviewed' : 'Pending';
 
-          const headlines = r.headlines || [];
-          const count = headlines.length;
-          let summaryText = count === 0 ? 'Clean' : `${count} finding${count !== 1 ? 's' : ''}`;
-          if (count > 0) {
-            summaryText += ': ' + headlines.map(h => escapeHtml(h)).join(', ');
-          }
+          let count = r.finding_count || 0;
+          try {
+            const stats = JSON.parse(r.screening_stats_json || '{}');
+            if (stats.consolidated && stats.consolidated.after != null) count = stats.consolidated.after;
+          } catch {}
+          const summaryText = count === 0 ? 'Clean' : `${count} finding${count !== 1 ? 's' : ''}`;
 
           return `<tr>
             <td onclick="openReport(${r.id})"><strong>${escapeHtml(r.subject_name)}</strong></td>
