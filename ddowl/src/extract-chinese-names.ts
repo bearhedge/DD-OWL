@@ -45,11 +45,18 @@ export function isCompanyName(text: string): boolean {
   return COMPANY_SUFFIXES.some(suffix => text.endsWith(suffix));
 }
 
+// Common Chinese name-like suffixes (broader than strict company suffixes)
+const NAME_SUFFIXES = [
+  '科技', '醫藥', '生物', '國際', '集團', '控股', '製藥', '電子',
+  '半導體', '智能', '新能源', '材料', '食品', '股份', '技術',
+];
+
 /**
  * Extract Chinese company name from text using regex
  * - Finds Chinese character sequences
  * - Allows spaces between chars (some PDFs have this)
- * - Validates as company name (ends in 公司/有限公司/控股/etc.)
+ * - First tries strict match (ends in 公司/有限公司/控股/etc.)
+ * - Falls back to longest Chinese sequence >= 4 chars
  *
  * @param text - Raw text extracted from PDF
  * @returns Chinese company name if found and validated, null otherwise
@@ -57,18 +64,31 @@ export function isCompanyName(text: string): boolean {
 export function extractChineseNameFromText(text: string): string | null {
   // Match Chinese characters (CJK unified ideographs)
   // Allow spaces between chars (some PDFs have space-separated chars)
-  // The pattern matches: Chinese char, followed by any number of (optional whitespace + Chinese char)
   const chinesePattern = /[\u4e00-\u9fff](?:\s*[\u4e00-\u9fff])*/g;
 
   const matches = text.match(chinesePattern);
   if (!matches) return null;
 
-  // Look for company name patterns
-  for (const match of matches) {
-    const cleaned = match.replace(/\s+/g, ''); // Remove spaces between chars
-    if (isCompanyName(cleaned)) {
-      return cleaned;
+  const cleaned = matches.map(m => m.replace(/\s+/g, ''));
+
+  // Pass 1: Strict company name (ends with 公司/控股/集團)
+  for (const name of cleaned) {
+    if (isCompanyName(name)) {
+      return name;
     }
+  }
+
+  // Pass 2: Longer Chinese sequences ending with common name suffixes (科技/醫藥/國際/etc.)
+  for (const name of cleaned) {
+    if (name.length >= 4 && NAME_SUFFIXES.some(s => name.endsWith(s))) {
+      return name;
+    }
+  }
+
+  // Pass 3: Longest Chinese sequence >= 4 chars (likely the company name)
+  const longest = cleaned.filter(n => n.length >= 4).sort((a, b) => b.length - a.length);
+  if (longest.length > 0) {
+    return longest[0];
   }
 
   return null;
