@@ -448,7 +448,10 @@
     <div class="modal" id="reportModal">
       <div class="modal-header">
         <h2 id="modalTitle">Report</h2>
-        <button class="modal-close" id="modalClose">&times;</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn" onclick="copyModal()">copy</button>
+          <button class="modal-close" id="modalClose">&times;</button>
+        </div>
       </div>
       <div id="modalContent"></div>
     </div>
@@ -553,8 +556,12 @@
           const reviewClass = r.edited_markdown ? 'reviewed' : (r.edit_distance != null ? 'pending' : 'unreviewed');
           const reviewText = r.edited_markdown ? 'Reviewed' : 'Pending';
 
-          const count = r.finding_count || 0;
-          const summaryText = count === 0 ? 'Clean' : `${count} finding${count !== 1 ? 's' : ''}`;
+          const headlines = r.headlines || [];
+          const count = headlines.length;
+          let summaryText = count === 0 ? 'Clean' : `${count} finding${count !== 1 ? 's' : ''}`;
+          if (count > 0) {
+            summaryText += ': ' + headlines.map(h => escapeHtml(h)).join(', ');
+          }
 
           return `<tr>
             <td onclick="openReport(${r.id})"><strong>${escapeHtml(r.subject_name)}</strong></td>
@@ -705,6 +712,19 @@
       loadStats();
       loadReports(document.getElementById('searchInput').value);
       loadLearnings();
+    }
+
+    // --- Copy modal content ---
+    async function copyModal() {
+      const content = document.getElementById('modalContent');
+      try {
+        await navigator.clipboard.writeText(content.innerText);
+        const btn = document.querySelector('.modal-header .btn');
+        btn.textContent = 'copied';
+        setTimeout(() => { btn.textContent = 'copy'; }, 2000);
+      } catch (e) {
+        console.error('Copy failed:', e);
+      }
     }
 
     // --- Quality rating ---
