@@ -12,6 +12,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import { PDFParse } from 'pdf-parse';
 import axios from 'axios';
 import * as fs from 'fs';
+import * as path from 'path';
 import pg from 'pg';
 import { extractChineseNameFromText } from './extract-chinese-names.js';
 
@@ -202,9 +203,10 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
       return banks;
     }
 
-    // Parse PDF
+    // Parse PDF (with CMap for CJK font decoding)
     const uint8Array = new Uint8Array(buffer);
-    const parser = new PDFParse(uint8Array);
+    const cMapUrl = path.join(process.cwd(), 'node_modules/pdfjs-dist/cmaps/');
+    const parser = new PDFParse({ data: uint8Array, cMapUrl, cMapPacked: true });
     const result = await parser.getText();
 
     // Search all pages for bank data; for long PDFs, focus on relevant sections
@@ -328,7 +330,8 @@ export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<PdfExtract
     }
 
     const uint8Array = new Uint8Array(buffer);
-    const parser = new PDFParse(uint8Array);
+    const cMapUrl = path.join(process.cwd(), 'node_modules/pdfjs-dist/cmaps/');
+    const parser = new PDFParse({ data: uint8Array, cMapUrl, cMapPacked: true });
     const result = await parser.getText();
 
     const banks = parseBanksFromText(result.pages);
