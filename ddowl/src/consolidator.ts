@@ -493,6 +493,40 @@ export function groupFindingsBySimilarity(
 }
 
 /**
+ * Merge cluster groups that describe the same incident across different Phase 2.5 clusters.
+ * Uses the existing calculateSimilarity() which handles bilingual text, keywords, proper nouns.
+ */
+function mergeAcrossClusterGroups(groups: RawFinding[][]): RawFinding[][] {
+  if (groups.length <= 1) return groups;
+
+  // Extract representative fingerprint from each group (use first/best finding)
+  const groupFps = groups.map(g => {
+    const best = g[0];
+    return best.fingerprint || extractFingerprint(best.headline, best.summary);
+  });
+
+  const merged: RawFinding[][] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < groups.length; i++) {
+    if (used.has(i)) continue;
+    const combined = [...groups[i]];
+    used.add(i);
+
+    for (let j = i + 1; j < groups.length; j++) {
+      if (used.has(j)) continue;
+      const sim = calculateSimilarity(groupFps[i], groupFps[j]);
+      if (sim >= 0.3) {
+        combined.push(...groups[j]);
+        used.add(j);
+      }
+    }
+    merged.push(combined);
+  }
+  return merged;
+}
+
+/**
  * Get the highest severity from a group
  */
 function getHighestSeverity(findings: RawFinding[]): 'RED' | 'AMBER' {
@@ -685,11 +719,18 @@ export async function consolidateFindings(
   }
 
   // Combine all groups
-  const allGroups: RawFinding[][] = [
+  let allGroups: RawFinding[][] = [
     ...Array.from(clusterGroups.values()),
     ...fallbackGroups
   ];
   console.log(`[CONSOLIDATE] Total ${allGroups.length} groups (${clusterGroups.size} from clustering, ${fallbackGroups.length} from fallback)`);
+
+  // Second pass: merge cluster groups that are about the same incident
+  const beforeMerge = allGroups.length;
+  allGroups = mergeAcrossClusterGroups(allGroups);
+  if (allGroups.length < beforeMerge) {
+    console.log(`[CONSOLIDATE] Cross-cluster merge: ${beforeMerge} → ${allGroups.length} groups`);
+  }
 
   const consolidated: ConsolidatedFinding[] = [];
 
