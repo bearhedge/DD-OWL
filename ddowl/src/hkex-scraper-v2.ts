@@ -10,6 +10,7 @@
 
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { PDFParse } from 'pdf-parse';
+import axios from 'axios';
 import * as fs from 'fs';
 import pg from 'pg';
 
@@ -297,6 +298,127 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
 
   } catch (err) {
     console.log(`    PDF parse error: ${err}`);
+  }
+
+  return banks;
+}
+
+/**
+ * Standalone PDF bank extraction (no Puppeteer needed)
+ * Downloads PDF via axios and extracts banks using the same parsing logic
+ */
+export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<BankAppointment[]> {
+  try {
+    const response = await axios.get(pdfUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+    });
+
+    const buffer = Buffer.from(response.data);
+    if (buffer.slice(0, 5).toString() !== '%PDF-') {
+      console.log(`    Not a valid PDF`);
+      return [];
+    }
+
+    // Reuse the same parsing logic as extractBanksFromPdf
+    const uint8Array = new Uint8Array(buffer);
+    const parser = new PDFParse(uint8Array);
+    const result = await parser.getText();
+
+    return parseBanksFromText(result.pages);
+  } catch (err) {
+    console.log(`    PDF download/parse error: ${err}`);
+    return [];
+  }
+}
+
+/**
+ * Shared bank parsing logic used by both Puppeteer and standalone extractors
+ */
+function parseBanksFromText(pages: { text: string }[]): BankAppointment[] {
+  const banks: BankAppointment[] = [];
+
+  type Role = 'sponsor' | 'coordinator' | 'bookrunner' | 'leadManager' | 'other';
+
+  let pagesText: string;
+  if (pages.length <= 10) {
+    pagesText = pages.map(p => p.text).join('\n');
+  } else {
+    const roleKeywords = /sponsor|coordinator|co-ordinator|bookrunner|lead\s*manager|appointed/i;
+    const relevantPages = pages.filter(p => roleKeywords.test(p.text));
+    pagesText = relevantPages.length > 0
+      ? relevantPages.map(p => p.text).join('\n')
+      : pages.slice(-3).map(p => p.text).join('\n');
+  }
+
+  function parseRolesFromText(text: string): Role[] {
+    const lower = text.toLowerCase();
+    const roles: Role[] = [];
+    if (lower.includes('sponsor')) roles.push('sponsor');
+    if (lower.includes('coordinator') || lower.includes('co-ordinator')) roles.push('coordinator');
+    if (lower.includes('bookrunner') || lower.includes('book runner')) roles.push('bookrunner');
+    if (lower.includes('lead manager') || lower.includes('lead-manager')) roles.push('leadManager');
+    return roles.length > 0 ? roles : ['other'];
+  }
+
+  // Method 1: "has appointed X as ..."
+  const appointmentPatterns = [
+    /has\s+appointed\s+([\s\S]+?Limited)\s+as\s+(?:its?\s+)?(?:the\s+)?(?:sole\s+)?(?:joint\s+)?((?:(?:global\s+)?(?:overall\s+)?(?:sponsor|coordinator|co-ordinator|bookrunner|book\s*runner|lead\s*manager)(?:\s*(?:and|,)\s*)?)+)/gi,
+  ];
+
+  for (const pattern of appointmentPatterns) {
+    let match;
+    while ((match = pattern.exec(pagesText)) !== null) {
+      const captured = match[1].replace(/\s+/g, ' ').trim();
+      const rolePart = match[2] || match[0];
+      const roles = parseRolesFromText(rolePart);
+
+      const bankNames = captured
+        .split(/\s+and\s+|\s*,\s*/)
+        .map(s => s.trim())
+        .filter(s => s.match(/Limited$/i) && s.length > 10);
+
+      for (const bankName of bankNames) {
+        if (!banks.find(b => b.bank === bankName) && !bankName.match(/HOLDINGS LIMITED$/i)) {
+          const isLead = roles.includes('sponsor') || roles.includes('coordinator');
+          banks.push({ bank: bankName, roles, isLead });
+        }
+      }
+    }
+  }
+
+  // Method 2: Role headings
+  const roleHeadingPattern = /^(?:Joint\s+)?(?:Sole\s+)?(?:Global\s+)?(?:Overall\s+)?((?:(?:Sponsor|Coordinator|Co-ordinator|Bookrunner|Lead\s*Manager)(?:\(s\))?(?:(?:\s*[-–]\s*|\s+and\s+)(?:Joint\s+)?(?:Sole\s+)?(?:Global\s+)?(?:Overall\s+)?)?)+)/i;
+
+  const lines = pagesText.split('\n');
+  let currentRoles: Role[] = ['other'];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    const headingMatch = trimmed.match(roleHeadingPattern);
+    if (headingMatch) {
+      currentRoles = parseRolesFromText(trimmed);
+      continue;
+    }
+
+    const isBankName =
+      trimmed.match(/Limited$/i) &&
+      trimmed.match(/^[A-Z]/) &&
+      trimmed.length > 15 &&
+      trimmed.length < 80 &&
+      !trimmed.match(/HOLDINGS LIMITED$/i) &&
+      !trimmed.match(/Stock Exchange|Commission|responsibility|disclaimer|announcement/i) &&
+      (trimmed.match(/Securities|Capital|Financial|Bank|Partners|Investment/i) || currentRoles[0] !== 'other');
+
+    if (isBankName) {
+      const bankName = trimmed.replace(/^\d+[\.\)]\s*/, '').trim();
+      if (bankName && !banks.find(b => b.bank === bankName)) {
+        const isLead = currentRoles.includes('sponsor') || currentRoles.includes('coordinator');
+        banks.push({ bank: bankName, roles: currentRoles, isLead });
+      }
+    }
   }
 
   return banks;

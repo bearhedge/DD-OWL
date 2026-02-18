@@ -621,20 +621,17 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
       status: 'running',
     });
 
-    // Re-scrape in background using shared browser
+    // Re-scrape in background using direct HTTP (no Puppeteer needed)
     (async () => {
       try {
-        const { extractBanksFromPdf, getBrowser, acceptDisclaimer, closeBrowser } = await import('./hkex-scraper-v2.js');
-        const browser = await getBrowser();
-        const page = await browser.newPage();
-        await acceptDisclaimer(page);
+        const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
 
         let updated = 0;
         for (const deal of missing) {
           if (!deal.pdf_url) continue;
 
           console.log(`Re-scraping: ${deal.company_name}`);
-          const banks = await extractBanksFromPdf(page, deal.pdf_url);
+          const banks = await extractBanksFromPdfUrl(deal.pdf_url);
 
           if (banks.length > 0) {
             for (const bank of banks) {
@@ -660,8 +657,6 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
           await new Promise(r => setTimeout(r, 200));
         }
 
-        await page.close();
-        await closeBrowser();
         console.log(`Re-scrape complete: ${updated}/${missing.length} deals updated`);
       } catch (err) {
         console.error('Re-scrape error:', err);
