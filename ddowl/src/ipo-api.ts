@@ -614,57 +614,62 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
     `);
 
     const missing = missingResult.rows;
-    res.json({
-      message: `Re-scraping ${missing.length} deals with missing banks`,
-      deals: missing.map((d: any) => d.company_name),
-      count: missing.length,
-      status: 'running',
-    });
 
-    // Re-scrape in background using direct HTTP (no Puppeteer needed)
-    (async () => {
-      try {
-        const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
+    if (missing.length === 0) {
+      res.json({ message: 'No deals with missing banks', count: 0 });
+      return;
+    }
 
-        let updated = 0;
-        for (const deal of missing) {
-          if (!deal.pdf_url) continue;
+    // Process synchronously so Cloud Run keeps the request alive
+    const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
 
-          console.log(`Re-scraping: ${deal.company_name}`);
-          const banks = await extractBanksFromPdfUrl(deal.pdf_url);
+    let updated = 0;
+    const results: { company: string; banksFound: number }[] = [];
 
-          if (banks.length > 0) {
-            for (const bank of banks) {
-              const bankResult = await pool.query(`
-                INSERT INTO banks (name) VALUES ($1)
-                ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
-                RETURNING id
-              `, [bank.bank]);
-              const bankId = bankResult.rows[0].id;
-
-              await pool.query(`
-                INSERT INTO deal_appointments (deal_id, bank_id, roles, is_lead, source_url)
-                VALUES ($1, $2, $3::bank_role[], $4, $5)
-                ON CONFLICT (deal_id, bank_id) DO UPDATE SET
-                  roles = EXCLUDED.roles,
-                  is_lead = EXCLUDED.is_lead
-              `, [deal.deal_id, bankId, bank.roles, bank.isLead, deal.pdf_url]);
-            }
-            updated++;
-            console.log(`  Found ${banks.length} banks for ${deal.company_name}`);
-          }
-
-          await new Promise(r => setTimeout(r, 200));
-        }
-
-        console.log(`Re-scrape complete: ${updated}/${missing.length} deals updated`);
-      } catch (err) {
-        console.error('Re-scrape error:', err);
+    for (const deal of missing) {
+      if (!deal.pdf_url) {
+        results.push({ company: deal.company_name, banksFound: -1 });
+        continue;
       }
-    })();
+
+      console.log(`Re-scraping: ${deal.company_name}`);
+      const banks = await extractBanksFromPdfUrl(deal.pdf_url);
+
+      if (banks.length > 0) {
+        for (const bank of banks) {
+          const bankResult = await pool.query(`
+            INSERT INTO banks (name) VALUES ($1)
+            ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+          `, [bank.bank]);
+          const bankId = bankResult.rows[0].id;
+
+          await pool.query(`
+            INSERT INTO deal_appointments (deal_id, bank_id, roles, is_lead, source_url)
+            VALUES ($1, $2, $3::bank_role[], $4, $5)
+            ON CONFLICT (deal_id, bank_id) DO UPDATE SET
+              roles = EXCLUDED.roles,
+              is_lead = EXCLUDED.is_lead
+          `, [deal.deal_id, bankId, bank.roles, bank.isLead, deal.pdf_url]);
+        }
+        updated++;
+        console.log(`  Found ${banks.length} banks for ${deal.company_name}`);
+      }
+
+      results.push({ company: deal.company_name, banksFound: banks.length });
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    console.log(`Re-scrape complete: ${updated}/${missing.length} deals updated`);
+    res.json({
+      message: `Re-scrape complete: ${updated}/${missing.length} deals updated`,
+      total: missing.length,
+      updated,
+      results,
+    });
   } catch (err) {
-    console.error('Re-scrape trigger error:', err);
-    res.status(500).json({ error: 'Failed to start re-scrape' });
+    console.error('Re-scrape error:', err);
+    res.status(500).json({ error: 'Failed to re-scrape' });
   }
 });
 
