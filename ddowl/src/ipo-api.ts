@@ -624,16 +624,26 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
     const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
 
     let updated = 0;
-    const results: { company: string; banksFound: number }[] = [];
+    const results: { company: string; banksFound: number; chineseName: string | null }[] = [];
 
     for (const deal of missing) {
       if (!deal.pdf_url) {
-        results.push({ company: deal.company_name, banksFound: -1 });
+        results.push({ company: deal.company_name, banksFound: -1, chineseName: null });
         continue;
       }
 
       console.log(`Re-scraping: ${deal.company_name}`);
-      const banks = await extractBanksFromPdfUrl(deal.pdf_url);
+      const { banks, chineseName } = await extractBanksFromPdfUrl(deal.pdf_url);
+
+      // Save Chinese name if found
+      if (chineseName) {
+        await pool.query(`
+          UPDATE companies SET name_cn = $2, updated_at = NOW()
+          WHERE id = (SELECT company_id FROM deals WHERE id = $1)
+          AND name_cn IS NULL
+        `, [deal.deal_id, chineseName]);
+        console.log(`  Chinese name: ${chineseName}`);
+      }
 
       if (banks.length > 0) {
         for (const bank of banks) {
@@ -656,7 +666,7 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
         console.log(`  Found ${banks.length} banks for ${deal.company_name}`);
       }
 
-      results.push({ company: deal.company_name, banksFound: banks.length });
+      results.push({ company: deal.company_name, banksFound: banks.length, chineseName });
       await new Promise(r => setTimeout(r, 200));
     }
 
@@ -670,6 +680,63 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
   } catch (err) {
     console.error('Re-scrape error:', err);
     res.status(500).json({ error: 'Failed to re-scrape' });
+  }
+});
+
+/**
+ * POST /api/ipo/extract-chinese-names
+ * Extracts Chinese company names from OC PDFs for deals missing name_cn
+ */
+ipoRouter.post('/extract-chinese-names', async (req: Request, res: Response) => {
+  try {
+    const missingResult = await pool.query(`
+      SELECT d.id as deal_id, c.name_en as company_name, c.id as company_id,
+             oc.pdf_url
+      FROM deals d
+      JOIN companies c ON c.id = d.company_id
+      LEFT JOIN oc_announcements oc ON oc.deal_id = d.id
+      WHERE d.status = 'active' AND c.name_cn IS NULL AND oc.pdf_url IS NOT NULL
+      ORDER BY d.filing_date DESC
+    `);
+
+    const deals = missingResult.rows;
+    if (deals.length === 0) {
+      res.json({ message: 'All active deals already have Chinese names', count: 0 });
+      return;
+    }
+
+    const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
+
+    let extracted = 0;
+    const results: { company: string; chineseName: string | null }[] = [];
+
+    for (const deal of deals) {
+      console.log(`Extracting Chinese name: ${deal.company_name}`);
+      const { chineseName } = await extractBanksFromPdfUrl(deal.pdf_url);
+
+      if (chineseName) {
+        await pool.query(`
+          UPDATE companies SET name_cn = $1, updated_at = NOW()
+          WHERE id = $2 AND name_cn IS NULL
+        `, [chineseName, deal.company_id]);
+        extracted++;
+        console.log(`  → ${chineseName}`);
+      }
+
+      results.push({ company: deal.company_name, chineseName });
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    console.log(`Chinese name extraction complete: ${extracted}/${deals.length}`);
+    res.json({
+      message: `Extracted ${extracted}/${deals.length} Chinese names`,
+      total: deals.length,
+      extracted,
+      results,
+    });
+  } catch (err) {
+    console.error('Chinese name extraction error:', err);
+    res.status(500).json({ error: 'Failed to extract Chinese names' });
   }
 });
 

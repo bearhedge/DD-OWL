@@ -13,6 +13,7 @@ import { PDFParse } from 'pdf-parse';
 import axios from 'axios';
 import * as fs from 'fs';
 import pg from 'pg';
+import { extractChineseNameFromText } from './extract-chinese-names.js';
 
 const { Pool } = pg;
 
@@ -303,11 +304,16 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
   return banks;
 }
 
+export interface PdfExtractionResult {
+  banks: BankAppointment[];
+  chineseName: string | null;
+}
+
 /**
  * Standalone PDF bank extraction (no Puppeteer needed)
- * Downloads PDF via axios and extracts banks using the same parsing logic
+ * Downloads PDF via axios and extracts banks + Chinese company name
  */
-export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<BankAppointment[]> {
+export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<PdfExtractionResult> {
   try {
     const response = await axios.get(pdfUrl, {
       responseType: 'arraybuffer',
@@ -318,18 +324,23 @@ export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<BankAppoin
     const buffer = Buffer.from(response.data);
     if (buffer.slice(0, 5).toString() !== '%PDF-') {
       console.log(`    Not a valid PDF`);
-      return [];
+      return { banks: [], chineseName: null };
     }
 
-    // Reuse the same parsing logic as extractBanksFromPdf
     const uint8Array = new Uint8Array(buffer);
     const parser = new PDFParse(uint8Array);
     const result = await parser.getText();
 
-    return parseBanksFromText(result.pages);
+    const banks = parseBanksFromText(result.pages);
+
+    // Extract Chinese company name from first few pages
+    const firstPagesText = result.pages.slice(0, 3).map(p => p.text).join('\n');
+    const chineseName = extractChineseNameFromText(firstPagesText);
+
+    return { banks, chineseName };
   } catch (err) {
     console.log(`    PDF download/parse error: ${err}`);
-    return [];
+    return { banks: [], chineseName: null };
   }
 }
 
