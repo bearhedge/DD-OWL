@@ -65,6 +65,42 @@ function jaccardSimilarity(a: string, b: string): number {
 }
 
 /**
+ * Match score combining Jaccard + first-word matching + abbreviation awareness
+ * Returns 0-1 score. Handles cases like "IMPRESSION DHP" vs "Impression Dahongpao Co., Ltd."
+ */
+function matchScore(dealName: string, securityName: string): number {
+  const jaccard = jaccardSimilarity(dealName, securityName);
+  if (jaccard >= 0.7) return jaccard;
+
+  const normA = normalizeName(dealName);
+  const normB = normalizeName(securityName);
+  const wordsA = normA.split(' ').filter(Boolean);
+  const wordsB = normB.split(' ').filter(Boolean);
+
+  if (wordsA.length === 0 || wordsB.length === 0) return jaccard;
+
+  // First word must match for abbreviation matching
+  if (wordsA[0] !== wordsB[0]) return jaccard;
+
+  // If first word matches and one name is a 2-word abbreviation of a longer name,
+  // check if the second word is an abbreviation (starts with same letters)
+  if (wordsB.length <= 3 && wordsA.length >= 2) {
+    const secWord = wordsB[1] || '';
+    // Check if any word in the deal name starts with the abbreviation
+    const isAbbrev = wordsA.some(w => w.length > secWord.length && w.startsWith(secWord));
+    if (isAbbrev) return 0.75;
+    // Also check if the abbreviation is initials of remaining words
+    const initials = wordsA.slice(1).map(w => w[0]).join('');
+    if (initials === secWord) return 0.75;
+  }
+
+  // Boost if first word matches and there's partial overlap
+  if (jaccard >= 0.3) return Math.min(jaccard + 0.2, 0.75);
+
+  return jaccard;
+}
+
+/**
  * Download and parse HKEX Securities List XLSX
  */
 async function downloadSecuritiesList(): Promise<ListedSecurity[]> {
@@ -150,17 +186,17 @@ export async function checkListings(pool: pg.Pool): Promise<{
   // Download securities list
   const securities = await downloadSecuritiesList();
 
-  // Fuzzy match
+  // Fuzzy match using combined scoring (Jaccard + abbreviation awareness)
   const matches: MatchResult[] = [];
-  const THRESHOLD = 0.7;
+  const THRESHOLD = 0.5;
 
   for (const deal of activeDeals) {
     let bestMatch: { security: ListedSecurity; similarity: number } | null = null;
 
     for (const sec of securities) {
-      const similarity = jaccardSimilarity(deal.companyName, sec.nameEn);
-      if (similarity >= THRESHOLD && (!bestMatch || similarity > bestMatch.similarity)) {
-        bestMatch = { security: sec, similarity };
+      const score = matchScore(deal.companyName, sec.nameEn);
+      if (score >= THRESHOLD && (!bestMatch || score > bestMatch.similarity)) {
+        bestMatch = { security: sec, similarity: score };
       }
     }
 
