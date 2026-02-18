@@ -66,7 +66,8 @@ ipoRouter.get('/deals', async (req: Request, res: Response) => {
           'raw_role', da.raw_role,
           'is_lead', da.is_lead
         )) FILTER (WHERE b.id IS NOT NULL) as banks,
-        array_agg(DISTINCT da.source_url) FILTER (WHERE da.source_url IS NOT NULL) as pdf_links
+        array_agg(DISTINCT da.source_url) FILTER (WHERE da.source_url IS NOT NULL) as pdf_links,
+        (SELECT oc.pdf_url FROM oc_announcements oc WHERE oc.deal_id = d.id ORDER BY oc.announcement_date DESC LIMIT 1) as oc_pdf_url
       FROM deals d
       JOIN companies c ON c.id = d.company_id
       LEFT JOIN deal_appointments da ON da.deal_id = d.id
@@ -624,11 +625,11 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
     const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
 
     let updated = 0;
-    const results: { company: string; banksFound: number; chineseName: string | null }[] = [];
+    const results: { company: string; banksFound: number; chineseName: string | null; pdfUrl: string | null }[] = [];
 
     for (const deal of missing) {
       if (!deal.pdf_url) {
-        results.push({ company: deal.company_name, banksFound: -1, chineseName: null });
+        results.push({ company: deal.company_name, banksFound: -1, chineseName: null, pdfUrl: null });
         continue;
       }
 
@@ -666,7 +667,7 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
         console.log(`  Found ${banks.length} banks for ${deal.company_name}`);
       }
 
-      results.push({ company: deal.company_name, banksFound: banks.length, chineseName });
+      results.push({ company: deal.company_name, banksFound: banks.length, chineseName, pdfUrl: deal.pdf_url });
       await new Promise(r => setTimeout(r, 200));
     }
 
@@ -708,7 +709,7 @@ ipoRouter.post('/extract-chinese-names', async (req: Request, res: Response) => 
     const { extractBanksFromPdfUrl } = await import('./hkex-scraper-v2.js');
 
     let extracted = 0;
-    const results: { company: string; chineseName: string | null }[] = [];
+    const results: { company: string; chineseName: string | null; pdfUrl: string }[] = [];
 
     for (const deal of deals) {
       console.log(`Extracting Chinese name: ${deal.company_name}`);
@@ -723,7 +724,7 @@ ipoRouter.post('/extract-chinese-names', async (req: Request, res: Response) => 
         console.log(`  → ${chineseName}`);
       }
 
-      results.push({ company: deal.company_name, chineseName });
+      results.push({ company: deal.company_name, chineseName, pdfUrl: deal.pdf_url });
       await new Promise(r => setTimeout(r, 200));
     }
 
