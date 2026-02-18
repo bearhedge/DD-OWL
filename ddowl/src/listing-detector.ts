@@ -89,9 +89,24 @@ function matchScore(dealName: string, securityName: string): number {
     // Check if any word in the deal name starts with the abbreviation
     const isAbbrev = wordsA.some(w => w.length > secWord.length && w.startsWith(secWord));
     if (isAbbrev) return 0.75;
-    // Also check if the abbreviation is initials of remaining words
+    // Check if the abbreviation is initials of remaining words
     const initials = wordsA.slice(1).map(w => w[0]).join('');
     if (initials === secWord) return 0.75;
+    // Check if abbreviation letters appear in order within a single word
+    // e.g. "dahongpao" contains d-h-p in order → matches "DHP"
+    for (const w of wordsA.slice(1)) {
+      if (secWord.length >= 2 && secWord.length <= 5 && w.length >= secWord.length * 2) {
+        let pos = 0;
+        let matched = 0;
+        for (const ch of secWord) {
+          const idx = w.indexOf(ch, pos);
+          if (idx === -1) break;
+          matched++;
+          pos = idx + 1;
+        }
+        if (matched === secWord.length) return 0.75;
+      }
+    }
   }
 
   // Boost if first word matches and there's partial overlap
