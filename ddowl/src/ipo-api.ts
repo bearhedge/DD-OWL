@@ -621,33 +621,13 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
       status: 'running',
     });
 
-    // Re-scrape in background
+    // Re-scrape in background using shared browser
     (async () => {
       try {
-        const { extractBanksFromPdf, closeBrowser } = await import('./hkex-scraper-v2.js');
-        const puppeteer = await import('puppeteer');
-        const browser = await puppeteer.default.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        });
+        const { extractBanksFromPdf, getBrowser, acceptDisclaimer, closeBrowser } = await import('./hkex-scraper-v2.js');
+        const browser = await getBrowser();
         const page = await browser.newPage();
-
-        // Accept disclaimer first
-        await page.goto('https://www1.hkexnews.hk/app/appindex.html', {
-          waitUntil: 'networkidle2',
-          timeout: 60000,
-        });
-        await new Promise(r => setTimeout(r, 2000));
-        await page.evaluate(() => {
-          const elements = document.querySelectorAll('button, a, input');
-          for (const el of elements) {
-            if (el.textContent?.trim().toUpperCase() === 'ACCEPT') {
-              (el as HTMLElement).click();
-              return;
-            }
-          }
-        });
-        await new Promise(r => setTimeout(r, 2000));
+        await acceptDisclaimer(page);
 
         let updated = 0;
         for (const deal of missing) {
@@ -681,7 +661,7 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
         }
 
         await page.close();
-        await browser.close();
+        await closeBrowser();
         console.log(`Re-scrape complete: ${updated}/${missing.length} deals updated`);
       } catch (err) {
         console.error('Re-scrape error:', err);

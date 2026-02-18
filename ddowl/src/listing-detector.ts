@@ -37,6 +37,7 @@ interface MatchResult {
  * Strips common suffixes, punctuation, and normalizes whitespace
  */
 function normalizeName(name: string): string {
+  if (!name) return '';
   return name
     .toLowerCase()
     .replace(/\b(co\.?,?\s*ltd\.?|limited|inc\.?|corp\.?|corporation|group|holdings?\s*(co\.?\s*)?ltd\.?|plc)\b/gi, '')

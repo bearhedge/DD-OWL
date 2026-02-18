@@ -44,7 +44,7 @@ export interface ScrapedDeal {
 
 let browser: Browser | null = null;
 
-async function getBrowser(): Promise<Browser> {
+export async function getBrowser(): Promise<Browser> {
   if (!browser) {
     browser = await puppeteer.launch({
       headless: true,
@@ -64,7 +64,7 @@ export async function closeBrowser(): Promise<void> {
 /**
  * Accept HKEX disclaimer
  */
-async function acceptDisclaimer(page: Page): Promise<void> {
+export async function acceptDisclaimer(page: Page): Promise<void> {
   await page.goto('https://www1.hkexnews.hk/app/appindex.html', {
     waitUntil: 'networkidle2',
     timeout: 60000,
