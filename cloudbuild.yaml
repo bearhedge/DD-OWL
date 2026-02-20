@@ -34,7 +34,7 @@ steps:
       - --allow-unauthenticated
       - --timeout=3600
       - --session-affinity
-      - --update-secrets=SERPER_API_KEYS=SERPER_API_KEYS:latest,DATABASE_URL=database-url:latest
+      - --update-secrets=SERPER_API_KEYS=SERPER_API_KEYS:latest,DATABASE_URL=ddowl-database-url:latest
       - --add-cloudsql-instances=fabled-cocoa-443004-n3:asia-east1:bearhedge
       - --quiet
 

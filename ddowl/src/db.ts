@@ -2,16 +2,21 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-// Database connection
-const pool = new Pool({
-  host: process.env.DB_HOST || '104.199.131.94',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'ddowl',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'DOMRD7x7ECUny4Pc615y9w==',
-  max: 10,
-  idleTimeoutMillis: 30000,
-});
+// Database connection — prefer DATABASE_URL (set by Cloud Run secret) to unify
+// with the Drizzle connection in src/db/index.ts. Hardcoded fallback for local dev.
+const pool = new Pool(
+  process.env.DATABASE_URL
+    ? { connectionString: process.env.DATABASE_URL }
+    : {
+        host: '104.199.131.94',
+        port: 5432,
+        database: 'ddowl',
+        user: 'postgres',
+        password: 'DOMRD7x7ECUny4Pc615y9w==',
+        max: 10,
+        idleTimeoutMillis: 30000,
+      }
+);
 
 export { pool };
 
