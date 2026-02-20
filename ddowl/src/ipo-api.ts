@@ -503,13 +503,15 @@ ipoRouter.post('/scrape-oc', async (req: Request, res: Response) => {
             }
           }
 
-          // Upsert company
+          // Upsert company (with Chinese name if available)
           const companyResult = await pool.query(`
-            INSERT INTO companies (name_en)
-            VALUES ($1)
-            ON CONFLICT (name_en) DO UPDATE SET updated_at = NOW()
+            INSERT INTO companies (name_en, name_cn)
+            VALUES ($1, $2)
+            ON CONFLICT (name_en) DO UPDATE SET
+              name_cn = COALESCE(companies.name_cn, EXCLUDED.name_cn),
+              updated_at = NOW()
             RETURNING id
-          `, [deal.company]);
+          `, [deal.company, deal.companyCn]);
           const companyId = companyResult.rows[0].id;
 
           // Re-activate lapsed deal if one exists, otherwise upsert

@@ -31,6 +31,7 @@ export interface BankAppointment {
 export interface Application {
   company: string;
   companyRaw: string;
+  companyCn: string | null;
   filingDate: string;
   ocPdfUrl: string;
   appId: string;
@@ -39,6 +40,7 @@ export interface Application {
 
 export interface ScrapedDeal {
   company: string;
+  companyCn: string | null;
   filingDate: string;
   banks: BankAppointment[];
   ocPdfUrl: string;
@@ -115,8 +117,14 @@ async function getApplicationsFromYear(
       if (!applicantMatch) return;
 
       const companyRaw = applicantMatch[1].trim();
-      // Clean up company name
+
+      // Extract Chinese name from raw text (Chinese chars appear after English name)
+      const cnMatch = companyRaw.match(/([\u4e00-\u9fff][\u4e00-\u9fff\s]*[\u4e00-\u9fff])/);
+      const companyCn = cnMatch ? cnMatch[1].replace(/\s+/g, '') : null;
+
+      // Clean up company name (English only)
       const company = companyRaw
+        .replace(/[\u4e00-\u9fff]+/g, '') // Remove Chinese characters
         .replace(/\s*-\s*[AB]\s*$/, '') // Remove " - B" suffix
         .replace(/\s*\(formerly known as.*\)/i, '') // Remove "formerly known as"
         .trim();
@@ -151,6 +159,7 @@ async function getApplicationsFromYear(
         results.push({
           company,
           companyRaw,
+          companyCn,
           filingDate,
           ocPdfUrl,
           appId,
@@ -505,6 +514,7 @@ export async function scrapeAllApplications(options: {
 
     deals.push({
       company: app.company,
+      companyCn: app.companyCn,
       filingDate: app.filingDate,
       banks,
       ocPdfUrl: app.ocPdfUrl,
