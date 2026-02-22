@@ -885,7 +885,7 @@ ipoRouter.post('/fix-deal-bank', async (req: Request, res: Response) => {
     } else {
       // Update the deal_banks row to point to the correct bank
       result = await pool.query(
-        `UPDATE deal_banks SET bank_id = $1, updated_at = NOW() WHERE deal_id = $2 AND bank_id = $3 RETURNING id`,
+        `UPDATE deal_banks SET bank_id = $1 WHERE deal_id = $2 AND bank_id = $3 RETURNING id`,
         [newBankId, dealId, oldBankId]
       );
       res.json({ action: 'reassigned', updated: result.rowCount });
