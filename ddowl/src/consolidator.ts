@@ -293,7 +293,7 @@ function datesWithinRange(years1: number[], years2: number[], maxDaysDiff: numbe
  * Calculate similarity score between two fingerprints (0-1)
  * Returns 0 if identity signals conflict (different people)
  */
-export function calculateSimilarity(fp1: FindingFingerprint, fp2: FindingFingerprint): number {
+export function calculateSimilarity(fp1: FindingFingerprint, fp2: FindingFingerprint, subjectName?: string): number {
   // CRITICAL: Check identity conflicts FIRST - if these conflict, NEVER merge
   const fp1Identity = fp1 as any; // Extended with identity fields
   const fp2Identity = fp2 as any;
@@ -339,64 +339,97 @@ export function calculateSimilarity(fp1: FindingFingerprint, fp2: FindingFingerp
     }
   }
 
+  // Build set of subject name tokens to exclude from similarity scoring
+  const subjectTokens = new Set<string>();
+  if (subjectName) {
+    // English words (3+ chars)
+    const engWords = subjectName.toLowerCase().match(/[a-z]{3,}/g) || [];
+    engWords.forEach(w => subjectTokens.add(w));
+    // CJK characters (2+ chars)
+    const cjkWords = subjectName.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    cjkWords.forEach(w => subjectTokens.add(w));
+    // Also add the full name
+    subjectTokens.add(subjectName.toLowerCase());
+  }
+
   // No identity conflicts - proceed with similarity calculation
   let score = 0;
 
   // Event type match: +0.4
+  let eventTypeScore = 0;
   if (fp1.eventType === fp2.eventType && fp1.eventType !== 'other') {
-    score += 0.4;
+    eventTypeScore = 0.4;
+    score += eventTypeScore;
   }
 
   // Entity overlap: +0.3 (scaled)
   const entityOverlap = fp1.entities.filter(e => fp2.entities.includes(e)).length;
   const maxEntities = Math.max(fp1.entities.length, fp2.entities.length, 1);
-  score += 0.3 * (entityOverlap / maxEntities);
+  const entityScore = 0.3 * (entityOverlap / maxEntities);
+  score += entityScore;
 
   // Year overlap: +0.2
+  let yearScore = 0;
   const yearOverlap = fp1.years.filter(y => fp2.years.includes(y)).length;
   if (yearOverlap > 0) {
-    score += 0.2;
+    yearScore = 0.2;
   } else if (fp1.years.length > 0 && fp2.years.length > 0) {
     // Check if years are within 2 years of each other
     const minDiff = Math.min(
       ...fp1.years.flatMap(y1 => fp2.years.map(y2 => Math.abs(y1 - y2)))
     );
     if (minDiff <= 2) {
-      score += 0.1;
+      yearScore = 0.1;
     }
   }
+  score += yearScore;
 
   // Keyword overlap: +0.1
+  let keywordScore = 0;
   const keywordOverlap = fp1.keywords.filter(k => fp2.keywords.includes(k)).length;
   if (keywordOverlap >= 2) {
-    score += 0.1;
+    keywordScore = 0.1;
+    score += keywordScore;
   }
 
   // Company/title match bonus: +0.2 (strong identity signal)
+  // Filter out subject company name before checking overlap
+  let companyScore = 0;
   if (companies1.length > 0 && companies2.length > 0) {
-    const companyMatch = companies1.some((c1: string) =>
-      companies2.some((c2: string) => c1.includes(c2) || c2.includes(c1))
-    );
-    if (companyMatch) score += 0.2;
+    const filtered1 = subjectTokens.size > 0 ? companies1.filter((c: string) => !subjectTokens.has(c) && ![...subjectTokens].some(t => c.includes(t))) : companies1;
+    const filtered2 = subjectTokens.size > 0 ? companies2.filter((c: string) => !subjectTokens.has(c) && ![...subjectTokens].some(t => c.includes(t))) : companies2;
+    if (filtered1.length > 0 && filtered2.length > 0) {
+      const companyMatch = filtered1.some((c1: string) =>
+        filtered2.some((c2: string) => c1.includes(c2) || c2.includes(c1))
+      );
+      if (companyMatch) {
+        companyScore = 0.2;
+        score += companyScore;
+      }
+    }
   }
 
   // === NEW: Date-based matching boost (+0.2) ===
   // If dates within 30 days (or same year for year-only), boost similarity
+  let dateScore = 0;
   if (datesWithinRange(fp1.years, fp2.years, 30)) {
-    score += 0.2;
+    dateScore = 0.2;
+    score += dateScore;
   }
 
   // === NEW: Event description Jaccard similarity boost (+0.15) ===
   // If >50% content word overlap, boost similarity
   const contentWords1 = (fp1 as any).contentWords || [];
   const contentWords2 = (fp2 as any).contentWords || [];
-  const jaccard = jaccardSimilarity(contentWords1, contentWords2);
-  if (jaccard > 0.5) {
-    score += 0.15;
-  } else if (jaccard > 0.3) {
+  const jaccardScore = jaccardSimilarity(contentWords1, contentWords2);
+  let jaccardBoost = 0;
+  if (jaccardScore > 0.5) {
+    jaccardBoost = 0.15;
+  } else if (jaccardScore > 0.3) {
     // Partial boost for moderate overlap
-    score += 0.08;
+    jaccardBoost = 0.08;
   }
+  score += jaccardBoost;
 
   // === Proper noun overlap bonus (+0.25) ===
   // Catches same-entity same-event from different outlets
@@ -404,15 +437,33 @@ export function calculateSimilarity(fp1: FindingFingerprint, fp2: FindingFingerp
   const text2 = contentWords2.join(' ');
   const nouns1 = extractProperNouns(text1);
   const nouns2 = extractProperNouns(text2);
+  // Remove subject name tokens from proper nouns (they're always present, no discriminative value)
+  if (subjectTokens.size > 0) {
+    for (const token of subjectTokens) {
+      nouns1.delete(token);
+      nouns1.delete(token.toLowerCase());
+      nouns2.delete(token);
+      nouns2.delete(token.toLowerCase());
+    }
+  }
+  let nounScore = 0;
   if (nouns1.size > 0 && nouns2.size > 0) {
     const overlap = [...nouns1].filter(n => nouns2.has(n)).length;
     const union = new Set([...nouns1, ...nouns2]).size;
     if (union > 0 && overlap / union > 0.3) {
-      score += 0.25;
+      nounScore = 0.25;
+      score += nounScore;
     }
   }
 
-  return Math.min(score, 1);
+  const finalScore = Math.min(score, 1);
+
+  // Log score breakdown for non-trivial scores
+  if (finalScore > 0.3) {
+    console.log(`[CONSOLIDATE] Score breakdown: ${finalScore.toFixed(3)} (eventType:${eventTypeScore} entity:${entityScore.toFixed(2)} year:${yearScore} keyword:${keywordScore} company:${companyScore} date:${dateScore} jaccard:${jaccardScore.toFixed(2)}→${jaccardBoost} nouns:${nounScore})`);
+  }
+
+  return finalScore;
 }
 
 /**
@@ -448,7 +499,8 @@ function hasEntityOverlap(fp1: FindingFingerprint, fp2: FindingFingerprint): boo
 export function groupFindingsBySimilarity(
   findings: RawFinding[],
   threshold: number = 0.4,
-  samePersonThreshold: number = 0.3
+  samePersonThreshold: number = 0.3,
+  subjectName?: string
 ): RawFinding[][] {
   if (findings.length === 0) return [];
   if (findings.length === 1) return [[findings[0]]];
@@ -475,7 +527,7 @@ export function groupFindingsBySimilarity(
       const fp1 = findingsWithFp[i].fingerprint;
       const fp2 = findingsWithFp[j].fingerprint;
 
-      const similarity = calculateSimilarity(fp1, fp2);
+      const similarity = calculateSimilarity(fp1, fp2, subjectName);
 
       // Use lower threshold when entities (person name) overlap
       const effectiveThreshold = hasEntityOverlap(fp1, fp2) ? samePersonThreshold : threshold;
@@ -496,7 +548,7 @@ export function groupFindingsBySimilarity(
  * Merge cluster groups that describe the same incident across different Phase 2.5 clusters.
  * Uses the existing calculateSimilarity() which handles bilingual text, keywords, proper nouns.
  */
-function mergeAcrossClusterGroups(groups: RawFinding[][]): RawFinding[][] {
+function mergeAcrossClusterGroups(groups: RawFinding[][], subjectName?: string): RawFinding[][] {
   if (groups.length <= 1) return groups;
 
   // Extract representative fingerprint from each group (use first/best finding)
@@ -515,8 +567,13 @@ function mergeAcrossClusterGroups(groups: RawFinding[][]): RawFinding[][] {
 
     for (let j = i + 1; j < groups.length; j++) {
       if (used.has(j)) continue;
-      const sim = calculateSimilarity(groupFps[i], groupFps[j]);
-      if (sim >= 0.3) {
+      const sim = calculateSimilarity(groupFps[i], groupFps[j], subjectName);
+      if (sim > 0.1) {
+        const label_i = groups[i][0]?.clusterLabel || groups[i][0]?.headline?.slice(0, 30) || `group-${i}`;
+        const label_j = groups[j][0]?.clusterLabel || groups[j][0]?.headline?.slice(0, 30) || `group-${j}`;
+        console.log(`[CONSOLIDATE] Cross-cluster sim: "${label_i}" vs "${label_j}" = ${sim.toFixed(3)}${sim >= 0.75 ? ' → MERGE' : ''}`);
+      }
+      if (sim >= 0.75) {
         combined.push(...groups[j]);
         used.add(j);
       }
@@ -718,7 +775,7 @@ export async function consolidateFindings(
       ...f,
       fingerprint: extractFingerprint(f.headline, f.summary)
     }));
-    fallbackGroups = groupFindingsBySimilarity(findingsWithFp, 0.5);
+    fallbackGroups = groupFindingsBySimilarity(findingsWithFp, 0.5, 0.3, subjectName);
     console.log(`[CONSOLIDATE] Fallback: grouped ${withoutCluster.length} findings into ${fallbackGroups.length} groups`);
   }
 
@@ -731,7 +788,7 @@ export async function consolidateFindings(
 
   // Second pass: merge cluster groups that are about the same incident
   const beforeMerge = allGroups.length;
-  allGroups = mergeAcrossClusterGroups(allGroups);
+  allGroups = mergeAcrossClusterGroups(allGroups, subjectName);
   if (allGroups.length < beforeMerge) {
     console.log(`[CONSOLIDATE] Cross-cluster merge: ${beforeMerge} → ${allGroups.length} groups`);
   }

@@ -228,12 +228,16 @@ function mergeSimilarClusters(allClusters: IncidentCluster[]): IncidentCluster[]
         cluster.sourceTiers.push(...other.sourceTiers);
         used.add(j);
         console.log(`[CLUSTER] Merged "${cluster.label}" with "${other.label}" (similarity: ${similarity.toFixed(2)})`);
+      } else if (similarity > 0.25) {
+        // Log near-misses for threshold evaluation
+        console.log(`[CLUSTER] Near-miss: "${cluster.label}" vs "${other.label}" (similarity: ${similarity.toFixed(2)}, NOT merged)`);
       }
     }
 
     merged.push(cluster);
   }
 
+  console.log(`[CLUSTER] mergeSimilarClusters: ${allClusters.length} in → ${merged.length} out (${allClusters.length - merged.length} merged)`);
   return merged;
 }
 
