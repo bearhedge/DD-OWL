@@ -860,7 +860,7 @@ ipoRouter.post('/populate-bank-short-names', async (req: Request, res: Response)
   }
 });
 
-// Fix deal_banks: reassign a deal's bank to the correct bank_id
+// Fix deal_appointments: reassign a deal's bank to the correct bank_id
 ipoRouter.post('/fix-deal-bank', async (req: Request, res: Response) => {
   try {
     const { dealId, oldBankId, newBankId } = req.body;
@@ -870,7 +870,7 @@ ipoRouter.post('/fix-deal-bank', async (req: Request, res: Response) => {
 
     // Check if new bank already assigned to this deal
     const existing = await pool.query(
-      `SELECT id FROM deal_banks WHERE deal_id = $1 AND bank_id = $2`,
+      `SELECT id FROM deal_appointments WHERE deal_id = $1 AND bank_id = $2`,
       [dealId, newBankId]
     );
 
@@ -878,14 +878,14 @@ ipoRouter.post('/fix-deal-bank', async (req: Request, res: Response) => {
     if (existing.rows.length > 0) {
       // New bank already exists for this deal, just delete the old one
       result = await pool.query(
-        `DELETE FROM deal_banks WHERE deal_id = $1 AND bank_id = $2 RETURNING id`,
+        `DELETE FROM deal_appointments WHERE deal_id = $1 AND bank_id = $2 RETURNING id`,
         [dealId, oldBankId]
       );
       res.json({ action: 'deleted_old', deleted: result.rowCount });
     } else {
-      // Update the deal_banks row to point to the correct bank
+      // Update the deal_appointments row to point to the correct bank
       result = await pool.query(
-        `UPDATE deal_banks SET bank_id = $1 WHERE deal_id = $2 AND bank_id = $3 RETURNING id`,
+        `UPDATE deal_appointments SET bank_id = $1 WHERE deal_id = $2 AND bank_id = $3 RETURNING id`,
         [newBankId, dealId, oldBankId]
       );
       res.json({ action: 'reassigned', updated: result.rowCount });
