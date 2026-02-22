@@ -1630,8 +1630,8 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
         query = template.replace('"{NAME}"', orClause);
       }
 
-      // Search Google (Serper) - up to 10 pages
-      const MAX_PAGES = 10;
+      // Search Google (Serper) - up to 20 pages
+      const MAX_PAGES = 20;
       const googleResults: SearchResult[] = [];
 
       for (let page = 1; page <= MAX_PAGES; page++) {
@@ -2052,7 +2052,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         console.log(`[V4] [SUPPLEMENTARY] Augmented with ${coreSubsidiaries.length} core subsidiaries. CJK names: ${suppCjkNames.length}, Non-CJK names: ${suppNonCjkNames.length}`);
       }
 
-      const SUPP_MAX_PAGES = 5;  // Supplementary = 5 pages (not 10)
+      const SUPP_MAX_PAGES = 10;  // Supplementary = 10 pages
       let suppResultCount = 0;
 
       for (let tIdx = 0; tIdx < supplementary.length; tIdx++) {
