@@ -75,6 +75,9 @@ const MIN_PARAGRAPH_COUNT = 2;   // Require at least 2 meaningful paragraphs
 
 /**
  * Check if content has sufficient quality (not just boilerplate)
+ * Note: upstream text has whitespace collapsed to single spaces by Cheerio,
+ * so double-newline paragraph splitting doesn't work. We use sentence-level
+ * checks instead, especially for CJK content.
  */
 function hasQualityContent(text: string): boolean {
   if (!text) return false;
@@ -82,15 +85,31 @@ function hasQualityContent(text: string): boolean {
   // Check minimum length
   if (text.length < MIN_CONTENT_LENGTH) return false;
 
-  // Split into paragraphs (sequences of text separated by double newlines or significant whitespace)
+  // For CJK-heavy content, check sentence density instead of paragraphs
+  // (Cheerio's .text() + whitespace collapse destroys paragraph breaks)
+  const cjkChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (cjkChars > 50) {
+    // CJK article: 50+ CJK characters + 300+ total length is real content
+    return true;
+  }
+
+  // For English/mixed content, check for sentence-like segments
+  // Split on sentence boundaries (periods, question marks, etc.)
+  const sentences = text
+    .split(/[.!?。！？]\s*/g)
+    .filter(s => s.trim().length > 20);
+
+  if (sentences.length >= MIN_PARAGRAPH_COUNT) return true;
+
+  // Fallback: try double-newline paragraphs (works when newlines survive)
   const paragraphs = text
     .split(/\n\s*\n|\r\n\s*\r\n/)
     .map(p => p.trim())
-    .filter(p => p.length > 50); // Only count paragraphs with 50+ chars
+    .filter(p => p.length > 50);
 
-  if (paragraphs.length < MIN_PARAGRAPH_COUNT) return false;
+  if (paragraphs.length >= MIN_PARAGRAPH_COUNT) return true;
 
-  return true;
+  return false;
 }
 
 // LLM Configuration - supports DeepSeek (preferred) or Kimi fallback

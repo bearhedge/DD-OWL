@@ -25,7 +25,7 @@ export const BENCHMARK_CASES: BenchmarkCase[] = [
         id: 'hck-xinno',
         description: 'Xinno Technology Park debt dispute',
         category: 'litigation',
-        keywords: ['信诺科技园', '3.37亿', '债务', '纠纷'],
+        keywords: ['信诺科技园', '3.37亿', '逃废债', 'Xinno', '信诺科技'],
         severity: 'AMBER',
       },
       {
