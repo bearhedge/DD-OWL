@@ -639,11 +639,21 @@ async function categorizeBatch(
   // Pre-filter: Mark irrelevant domains and fiction/entertainment as GREEN before LLM call
   const relevant: BatchSearchResult[] = [];
   let skippedCount = 0;
+  const ADVERSE_KEYWORDS_TRIAGE = ['罚款', '处罚', '诈骗', '逮捕', '判刑', '洗钱', '制裁', '黑名单',
+    'penalty', 'fraud', 'arrested', 'convicted', 'sanctions', 'blacklist', 'investigation',
+    '贿赂', '腐败', '非法', '拘留'];
   for (const r of results) {
     const skipCheck = shouldSkipUrl({ title: r.title, snippet: r.snippet || '', url: r.url });
     if (skipCheck.skip) {
       output.green.push({ ...r, category: 'GREEN' as const, reason: skipCheck.reason });
       skippedCount++;
+
+      // Spotlight: pre-filter marked GREEN but article has adverse keywords — possible false negative
+      const textToCheck = (r.title + ' ' + (r.snippet || '')).toLowerCase();
+      const matched = ADVERSE_KEYWORDS_TRIAGE.filter(kw => textToCheck.includes(kw.toLowerCase()));
+      if (matched.length > 0) {
+        console.log(`[SPOTLIGHT] Pre-filter GREEN but has adverse keywords: "${r.title.slice(0, 60)}" (filter: ${skipCheck.reason}, keywords: ${matched.join(',')})`);
+      }
     } else {
       relevant.push(r);
     }

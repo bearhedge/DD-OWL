@@ -348,6 +348,14 @@ async function fetchWithPuppeteer(url: string): Promise<string> {
 // Hybrid fetch: axios first with validation, Puppeteer fallback
 export async function fetchPageContent(url: string): Promise<string> {
   console.log(`[FETCH] Starting fetch for: ${url}`);
+
+  // Binary files can OOM the container on download — return empty so caller routes to FURTHER
+  const urlPath = url.toLowerCase().split('?')[0];
+  if (urlPath.endsWith('.pdf') || urlPath.endsWith('.doc') || urlPath.endsWith('.docx') || urlPath.endsWith('.xls') || urlPath.endsWith('.xlsx')) {
+    console.log(`[FETCH] Binary file, skipping download (OOM risk): ${url}`);
+    return '';
+  }
+
   const startTime = Date.now();
 
   // Try axios first (faster, 90% success rate) with quality validation
@@ -606,6 +614,8 @@ If the article does NOT mention "${subjectName}" or has NO adverse information, 
       // If ALL claims were rejected, downgrade to GREEN (likely hallucination)
       if (validatedClaims.length === 0 && rawClaims.length > 0) {
         console.log(`[HALLUCINATION_DETECTED] All ${rawClaims.length} claims rejected - downgrading to GREEN`);
+        const claimSummaries = rawClaims.map((c: any) => (c.claim_en || c.claim_zh || '').slice(0, 40)).join('; ');
+        console.log(`[SPOTLIGHT] Hallucination filter killed: "${(analysis.headline || '').slice(0, 60)}" (claims rejected: ${rawClaims.length}, claims: ${claimSummaries})`);
         return {
           isAdverse: false,
           severity: 'GREEN',

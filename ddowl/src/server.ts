@@ -1343,6 +1343,8 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
     let restoredPassed: BatchSearchResult[] | null = null;
     let restoredConsolidated: ConsolidatedFinding[] | null = null;
     let parkedArticles: BatchSearchResult[] = [];  // Track parked duplicates for consolidation
+    let clusterStats = { totalClusters: 0, articlesToAnalyze: 0, articlesParked: 0 };  // For funnel summary
+    let passedEliminationCount = 0;  // Snapshot before clustering overwrites `passed`
 
     if (existingSession && incomingSessionId) {
       // Reconnection: reuse existing session
@@ -2194,6 +2196,11 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         rule: ruleNames[r.reason] || r.reason,
       });
     }
+    // Adverse keywords for spotlight checks
+    const ADVERSE_KEYWORDS = ['罚款', '处罚', '诈骗', '逮捕', '判刑', '洗钱', '制裁', '黑名单',
+      'penalty', 'fraud', 'arrested', 'convicted', 'sanctions', 'blacklist', 'investigation',
+      '贿赂', '腐败', '非法', '拘留'];
+
     for (const r of progEliminated) {
       const bucket = urlTracker.programmaticElimination.eliminated[r.reason as keyof typeof urlTracker.programmaticElimination.eliminated];
       if (bucket) {
@@ -2209,6 +2216,13 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         title: r.title,
         rule: ruleNames[r.reason] || r.reason,
       });
+
+      // Spotlight: eliminated article contains adverse keywords — possible false positive
+      const textToCheck = (r.title + ' ' + (r.snippet || '')).toLowerCase();
+      const matched = ADVERSE_KEYWORDS.filter(kw => textToCheck.includes(kw.toLowerCase()));
+      if (matched.length > 0) {
+        console.log(`[SPOTLIGHT] Eliminated article HAS adverse keywords: "${r.title.slice(0, 60)}" (rule: ${ruleNames[r.reason] || r.reason}, keywords: ${matched.join(',')})`);
+      }
     }
 
       sendEvent({
@@ -2221,6 +2235,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         duration: Date.now() - elimStart,
       });
     } // End of elimination phase else block
+    passedEliminationCount = passed.length;  // Snapshot before clustering/dedupe overwrite
 
     if (passed.length === 0) {
       clearInterval(heartbeat);
@@ -2412,6 +2427,9 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         clusters: clusterResult.clusters.map(c => ({ label: c.label, count: c.articles.length })),
         duration: Date.now() - clusterStart,
       });
+
+      // Hoist clustering stats for funnel summary
+      clusterStats = { totalClusters: clusterResult.stats.totalClusters, articlesToAnalyze: clusterResult.stats.articlesToAnalyze, articlesParked: clusterResult.stats.articlesParked };
 
       // Park redundant articles (visible in UI as "further links")
       // Store parked articles for later inclusion in consolidated findings
@@ -2733,6 +2751,24 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         continue;
       }
 
+      // PDFs/binary files can't be fetched safely (OOM risk) — route to FURTHER for manual review
+      const lowerUrlPath = item.url.toLowerCase().split('?')[0];
+      if (lowerUrlPath.endsWith('.pdf') || lowerUrlPath.endsWith('.doc') || lowerUrlPath.endsWith('.docx') || lowerUrlPath.endsWith('.xls') || lowerUrlPath.endsWith('.xlsx')) {
+        const furtherReason = 'Binary file (PDF/DOC) - needs manual review';
+        console.log(`[SPOTLIGHT] FURTHER (binary): "${item.title.slice(0, 60)}" (${item.url.slice(0, 80)})`);
+        urlTracker.processed.push({ url: item.url, title: item.title, query: item.query, result: 'FURTHER', headline: furtherReason });
+        sendEvent({
+          type: 'further_link',
+          url: item.url,
+          title: item.title,
+          reason: furtherReason,
+          originalCategory: item.category,
+          triageReason: item.reason,
+        });
+        await updateSession(sessionId, { currentIndex: i + 1, findings: allFindings }, connectionId);
+        continue;
+      }
+
       sendEvent({
         type: 'analyze_start',
         index: i + 1,
@@ -2898,8 +2934,8 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
             else if (isErrorPage) furtherReason = 'Error page - needs manual check';
             else if (!subjectInContent) furtherReason = 'Subject not in content - verify manually';
 
-            // Log explicitly so it's visible
-            console.log(`[V4] FURTHER: ${item.category} article (${furtherReason}): ${item.title}`);
+            // Log explicitly so it's visible in Cloud Logs
+            console.log(`[SPOTLIGHT] FURTHER: "${item.title.slice(0, 60)}" (category: ${item.category}, reason: ${furtherReason}, triage: ${item.reason})`);
 
             urlTracker.processed.push({ url: item.url, title: item.title, query: item.query, result: 'FURTHER', headline: furtherReason });
             // Only send further_link event (not analyze_result to avoid duplicate logs)
@@ -3068,6 +3104,16 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
       cleanResults,
       profile: subjectProfile,
     });
+
+    // ═══ PIPELINE FUNNEL SUMMARY (Cloud Logs) ═══
+    console.log(`[PIPELINE] ═══ FUNNEL: ${subjectName} ═══`);
+    console.log(`[PIPELINE] Search:       ${allResults.length} articles gathered`);
+    console.log(`[PIPELINE] Elimination:  ${allResults.length} → ${passedEliminationCount} passed (${progEliminated.length} eliminated: domain=${breakdown.noise_domain + breakdown.trash_domain}, title=${breakdown.noise_title_pattern}, keyword=${breakdown.missing_dirty_word}, name_sep=${breakdown.name_char_separation})`);
+    console.log(`[PIPELINE] Clustering:   ${clusterStats.totalClusters} clusters → ${clusterStats.articlesToAnalyze} to analyze (${clusterStats.articlesParked} parked)`);
+    console.log(`[PIPELINE] Categorize:   RED:${categorized.red.length} AMBER:${categorized.amber.length} GREEN:${categorized.green.length}`);
+    console.log(`[PIPELINE] Analyze:      ${urlTracker.processed.length} processed → ADVERSE:${processedAdverse} CLEARED:${processedCleared} FURTHER:${urlTracker.processed.filter(p => p.result === 'FURTHER').length} FAILED:${processedFailed}`);
+    console.log(`[PIPELINE] Consolidate:  ${allFindings.length} → ${consolidatedFindings.length} findings`);
+    console.log(`[PIPELINE] ═══ FINAL: ${consolidatedFindings.length} findings (${redFindings.length} RED, ${amberFindings.length} AMBER) in ${(totalDuration / 60000).toFixed(1)} min ═══`);
 
     // Save final profile to session
     await updateSession(sessionId, { profile: subjectProfile }, connectionId);
