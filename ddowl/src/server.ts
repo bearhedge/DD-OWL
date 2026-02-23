@@ -43,9 +43,11 @@ import { getResearchStatus, startPersonResearch, stopPersonResearch } from './pe
 import { generateWordReport } from './word-report.js';
 import { loadHistory, markRunClean, getRunDiff } from './run-tracker.js';
 import { validateDeals } from './validator.js';
-import { initLogDirectories, saveScreeningLog as saveLog, loadScreeningLog as loadLog, listScreeningLogs, saveBenchmarkResult, loadBenchmarkResults } from './logging/storage.js';
+import { initLogDirectories, saveScreeningLog as saveLog, loadScreeningLog as loadLog, listScreeningLogs, saveBenchmarkResult, loadBenchmarkResults, saveFunnelSnapshot } from './logging/storage.js';
 import { MetricsTracker } from './metrics/tracker.js';
 import { evaluateBenchmark, getBenchmarkCase } from './metrics/benchmarks.js';
+import { traceFunnel, printTraceReport } from './metrics/tracer.js';
+import { FunnelPhaseSnapshot, FunnelSnapshot } from './types.js';
 import { eliminateObviousNoise, getEliminationBreakdown, EliminationResult, EliminationBreakdown, EliminatedResult, llmBatchTitleDedupe, TitleDedupeProgress } from './eliminator.js';
 import { getChineseVariantsLLM } from './utils/chinese.js';
 import { createSession, getSession, updateSession, deleteSession, ScreeningSession, DetectedCompany } from './session-store.js';
@@ -1111,6 +1113,11 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
     console.log(`[V4] Entity context provided: "${subjectContext}"`);
   }
 
+  // Benchmark funnel tracing
+  const benchmarkCase = getBenchmarkCase(subjectName);
+  const isBenchmarkRun = !!benchmarkCase;
+  const funnelPhases: FunnelPhaseSnapshot[] = [];
+
   // Session-based reconnection (preferred) - restore state from Redis
   let existingSession: ScreeningSession | null = null;
   if (incomingSessionId) {
@@ -1977,7 +1984,22 @@ If you cannot determine a field with reasonable confidence, use the default empt
             subjectProfile.associatedCompanies = parsed.associatedCompanies || [];
             subjectProfile.associatedPeople = parsed.associatedPeople || [];
             subjectProfile.lastUpdated = Date.now();
-            console.log(`[V4] Profile seed extracted: gender=${subjectProfile.gender}, role=${subjectProfile.currentRole?.title}, companies=${subjectProfile.associatedCompanies.length}`);
+
+            // Compute confidence from how many fields the LLM actually populated
+            let filledFields = 0;
+            if (subjectProfile.gender && subjectProfile.gender !== 'unknown') filledFields++;
+            if (subjectProfile.nationality.length > 0) filledFields++;
+            if (subjectProfile.ageRange) filledFields++;
+            if (subjectProfile.currentRole) filledFields++;
+            if (subjectProfile.pastRoles.length > 0) filledFields++;
+            if (subjectProfile.industry.length > 0) filledFields++;
+            if (subjectProfile.associatedCompanies.length > 0) filledFields++;
+            if (subjectProfile.associatedPeople.length > 0) filledFields++;
+            if (filledFields >= 5) subjectProfile.confidence = 'high';
+            else if (filledFields >= 3) subjectProfile.confidence = 'medium';
+            // else stays 'low'
+
+            console.log(`[V4] Profile seed extracted: gender=${subjectProfile.gender}, role=${subjectProfile.currentRole?.title}, companies=${subjectProfile.associatedCompanies.length}, confidence=${subjectProfile.confidence} (${filledFields}/8 fields)`);
           }
         } else {
           console.log(`[V4] No DeepSeek API key - skipping profile seed`);
@@ -2184,6 +2206,16 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
       progEliminated = elimResult.eliminated;
       bypassed = elimResult.bypassed;
       breakdown = getEliminationBreakdown(progEliminated, bypassed);
+
+    if (isBenchmarkRun) {
+      funnelPhases.push({
+        phase: 'elimination',
+        articles: [
+          ...passed.map(a => ({ url: a.url, title: a.title, snippet: a.snippet })),
+          ...progEliminated.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, eliminationRule: a.reason })),
+        ],
+      });
+    }
 
     // Track programmatic elimination results AND send per-item events for auditing
     const ruleNames: Record<string, string> = {
@@ -2473,6 +2505,16 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         });
       }
 
+      if (isBenchmarkRun && clusterResult) {
+        funnelPhases.push({
+          phase: 'clustering',
+          articles: [
+            ...clusterResult.toAnalyze.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, clusterId: (a as any).clusterId, clusterLabel: (a as any).clusterLabel })),
+            ...clusterResult.parked.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, clusterId: (a as any).clusterId, clusterLabel: (a as any).clusterLabel, parked: true })),
+          ],
+        });
+      }
+
       // Continue with deduplicated results - clear cluster progress fields
       passed = clusterResult.toAnalyze;
       await updateSession(sessionId, {
@@ -2577,6 +2619,17 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
       // Merge new results with any restored partial results
       // partialCategorized already contains both restored + newly categorized items
       categorized = partialCategorized;
+
+      if (isBenchmarkRun) {
+        funnelPhases.push({
+          phase: 'categorize',
+          articles: [
+            ...categorized.red.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, clusterId: (a as any).clusterId, clusterLabel: (a as any).clusterLabel, classification: 'RED' })),
+            ...categorized.amber.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, clusterId: (a as any).clusterId, clusterLabel: (a as any).clusterLabel, classification: 'AMBER' })),
+            ...categorized.green.map(a => ({ url: a.url, title: a.title, snippet: a.snippet, clusterId: (a as any).clusterId, clusterLabel: (a as any).clusterLabel, classification: 'GREEN' })),
+          ],
+        });
+      }
 
       sendEvent({
         type: 'categorize_complete',
@@ -3218,6 +3271,26 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         matched: benchmarkResult.matchedIssues,
         missed: benchmarkResult.missedIssues,
       });
+    }
+
+    // Benchmark funnel trace
+    if (isBenchmarkRun && benchmarkCase) {
+      funnelPhases.push({
+        phase: 'consolidate',
+        articles: consolidatedFindings.map(f => ({
+          url: f.sources?.[0]?.url || '', title: f.headline, snippet: f.summary,
+        })),
+      });
+
+      const snapshot: FunnelSnapshot = {
+        subject: subjectName,
+        runId: metrics.runId,
+        timestamp: new Date().toISOString(),
+        phases: funnelPhases,
+      };
+      saveFunnelSnapshot(snapshot);
+      const traceReport = traceFunnel(snapshot, benchmarkCase);
+      printTraceReport(traceReport);
     }
 
     activeScreenings.delete(screeningKey);
