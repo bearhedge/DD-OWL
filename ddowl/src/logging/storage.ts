@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { ScreeningMetrics, BenchmarkResult } from '../types.js';
+import { ScreeningMetrics, BenchmarkResult, FunnelSnapshot } from '../types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,4 +163,14 @@ export function loadBenchmarkResults(subject?: string): BenchmarkResult[] {
   }
 
   return results.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+}
+
+// Save funnel snapshot for benchmark tracing
+export function saveFunnelSnapshot(snapshot: FunnelSnapshot): void {
+  ensureDir(path.join(BENCHMARKS_DIR, 'funnels'));
+  const safeName = snapshot.subject.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_');
+  const filename = `${snapshot.timestamp.split('T')[0]}-${safeName}.json`;
+  const filepath = path.join(BENCHMARKS_DIR, 'funnels', filename);
+  fs.writeFileSync(filepath, JSON.stringify(snapshot, null, 2));
+  console.log(`[BENCHMARK] Funnel snapshot saved: ${filepath}`);
 }

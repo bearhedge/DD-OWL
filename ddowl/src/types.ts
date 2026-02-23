@@ -187,16 +187,22 @@ export interface ScreeningMetrics {
   totalCostUSD: number;
 }
 
-// Benchmark case definition
+// Benchmark types
+export interface ExpectedIssue {
+  id: string;
+  description: string;
+  category: string;
+  keywords: string[];
+  severity: 'RED' | 'AMBER';
+  yearRange?: [number, number];
+}
+
 export interface BenchmarkCase {
   subject: string;
+  aliases?: string[];
   type: 'person' | 'company';
   region: 'hk' | 'cn' | 'global';
-  expectedIssues: {
-    description: string;
-    keywords: string[];
-    severity: 'RED' | 'AMBER';
-  }[];
+  expectedIssues: ExpectedIssue[];
 }
 
 // Benchmark result
@@ -209,4 +215,36 @@ export interface BenchmarkResult {
   recall: number;
   matchedIssues: string[];
   missedIssues: string[];
+}
+
+// Funnel tracing types
+export interface FunnelPhaseSnapshot {
+  phase: string;
+  articles: { url: string; title: string; snippet?: string; clusterId?: string; clusterLabel?: string; classification?: string; eliminationRule?: string; parked?: boolean }[];
+}
+
+export interface FunnelSnapshot {
+  subject: string;
+  runId: string;
+  timestamp: string;
+  phases: FunnelPhaseSnapshot[];
+}
+
+export interface IssueTrace {
+  issueId: string;
+  description: string;
+  found: boolean;
+  lostAtPhase?: string;
+  lostReason?: string;
+  phasePresence: { phase: string; matchCount: number; detail?: string }[];
+}
+
+export interface TraceReport {
+  subject: string;
+  runId: string;
+  timestamp: string;
+  recall: number;
+  totalExpected: number;
+  totalFound: number;
+  traces: IssueTrace[];
 }
