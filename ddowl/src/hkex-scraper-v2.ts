@@ -178,8 +178,9 @@ async function getApplicationsFromYear(
 /**
  * Download PDF and extract bank data
  */
-export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<BankAppointment[]> {
+export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<PdfExtractionResult> {
   const banks: BankAppointment[] = [];
+  let chineseName: string | null = null;
 
   try {
     // Fetch PDF using page context (with session cookies)
@@ -202,7 +203,7 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
 
     if ('error' in pdfData && pdfData.error) {
       console.log(`    PDF fetch error: ${pdfData.error}`);
-      return banks;
+      return { banks: [], chineseName: null };
     }
 
     const buffer = Buffer.from(pdfData.data as string, 'base64');
@@ -210,7 +211,7 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
     // Check if it's a valid PDF
     if (buffer.slice(0, 5).toString() !== '%PDF-') {
       console.log(`    Not a valid PDF`);
-      return banks;
+      return { banks: [], chineseName: null };
     }
 
     // Parse PDF (with CMap for CJK font decoding)
@@ -218,6 +219,10 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
     const cMapUrl = path.join(process.cwd(), 'node_modules/pdfjs-dist/cmaps/');
     const parser = new PDFParse({ data: uint8Array, cMapUrl, cMapPacked: true });
     const result = await parser.getText();
+
+    // Extract Chinese company name from first few pages
+    const firstPagesText = result.pages.slice(0, 3).map(p => p.text).join('\n');
+    chineseName = extractChineseNameFromText(firstPagesText);
 
     // Search all pages for bank data; for long PDFs, focus on relevant sections
     let lastPagesText: string;
@@ -311,9 +316,10 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<B
 
   } catch (err) {
     console.log(`    PDF parse error: ${err}`);
+    return { banks: [], chineseName: null };
   }
 
-  return banks;
+  return { banks, chineseName };
 }
 
 export interface PdfExtractionResult {
@@ -506,15 +512,18 @@ export async function scrapeAllApplications(options: {
     console.log(`[${i + 1}/${uniqueApps.length}] ${app.company}`);
 
     let banks: BankAppointment[] = [];
+    let pdfChineseName: string | null = null;
 
     if (extractBanks && app.ocPdfUrl) {
-      banks = await extractBanksFromPdf(page, app.ocPdfUrl);
+      const pdfResult = await extractBanksFromPdf(page, app.ocPdfUrl);
+      banks = pdfResult.banks;
+      pdfChineseName = pdfResult.chineseName;
       console.log(`    Banks: ${banks.length}`);
     }
 
     deals.push({
       company: app.company,
-      companyCn: app.companyCn,
+      companyCn: app.companyCn || pdfChineseName,
       filingDate: app.filingDate,
       banks,
       ocPdfUrl: app.ocPdfUrl,

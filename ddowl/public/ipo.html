@@ -668,8 +668,8 @@
         allData = (json.deals || []).map(d => {
           // Extract sponsors and others from banks array
           const banks = d.banks || [];
-          const sponsors = banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
-          const others = banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
+          const sponsors = [...new Set(banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
+          const others = [...new Set(banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
 
           // Format listing date from YYYY-MM-DD to DD/MM/YYYY for existing sort/display code
           let dateStr = '';
@@ -719,8 +719,8 @@
 
         activeData = (json.deals || []).map(d => {
           const banks = d.banks || [];
-          const sponsors = banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
-          const others = banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
+          const sponsors = [...new Set(banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
+          const others = [...new Set(banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
 
           // Format filing date from YYYY-MM-DD to DD/MM/YYYY
           let dateStr = '';
@@ -1145,8 +1145,8 @@
 
         otherData = (json.deals || []).map(d => {
           const banks = d.banks || [];
-          const sponsors = banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
-          const others = banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name);
+          const sponsors = [...new Set(banks.filter(b => b.roles && b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
+          const others = [...new Set(banks.filter(b => !b.roles || !b.roles.includes('sponsor')).map(b => b.short_name || b.bank_name))];
 
           let dateStr = '';
           if (d.filing_date) {
