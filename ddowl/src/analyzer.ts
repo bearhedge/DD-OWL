@@ -184,11 +184,12 @@ function normalizeEncoding(encoding: string): string {
 }
 
 // Fast fetch with axios (with proper encoding handling and validation)
-async function fetchWithAxios(url: string): Promise<FetchValidationResult> {
+async function fetchWithAxios(url: string, timeoutMs?: number, signal?: AbortSignal): Promise<FetchValidationResult> {
   let response: AxiosResponse;
   try {
     response = await axios.get(url, {
-      timeout: 15000,
+      timeout: timeoutMs || 15000,
+      maxContentLength: 5 * 1024 * 1024, // 5MB max — prevents OOM on large files
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -197,6 +198,7 @@ async function fetchWithAxios(url: string): Promise<FetchValidationResult> {
       maxRedirects: 5,
       responseType: 'arraybuffer', // Get raw bytes
       validateStatus: (status) => status < 500, // Accept redirects and client errors for logging
+      signal,
     });
   } catch (error: any) {
     // Network errors, timeouts, etc.
@@ -346,20 +348,20 @@ async function fetchWithPuppeteer(url: string): Promise<string> {
 }
 
 // Hybrid fetch: axios first with validation, Puppeteer fallback
-export async function fetchPageContent(url: string): Promise<string> {
+export async function fetchPageContent(url: string, signal?: AbortSignal): Promise<string> {
   console.log(`[FETCH] Starting fetch for: ${url}`);
-
-  // Binary files can OOM the container on download — return empty so caller routes to FURTHER
-  const urlPath = url.toLowerCase().split('?')[0];
-  if (urlPath.endsWith('.pdf') || urlPath.endsWith('.doc') || urlPath.endsWith('.docx') || urlPath.endsWith('.xls') || urlPath.endsWith('.xlsx')) {
-    console.log(`[FETCH] Binary file, skipping download (OOM risk): ${url}`);
-    return '';
-  }
 
   const startTime = Date.now();
 
+  // Binary files: attempt download with 5s timeout (small PDFs like court docs are valuable)
+  const urlPath = url.toLowerCase().split('?')[0];
+  const isBinaryFile = urlPath.endsWith('.pdf') || urlPath.endsWith('.doc') || urlPath.endsWith('.docx') || urlPath.endsWith('.xls') || urlPath.endsWith('.xlsx');
+  if (isBinaryFile) {
+    console.log(`[FETCH] Binary file detected, attempting with 5s timeout: ${url}`);
+  }
+
   // Try axios first (faster, 90% success rate) with quality validation
-  const axiosResult = await fetchWithAxios(url);
+  const axiosResult = await fetchWithAxios(url, isBinaryFile ? 5000 : undefined, signal);
   const fetchTime = Date.now() - startTime;
 
   if (axiosResult.valid && axiosResult.content && axiosResult.content.length > 100) {
