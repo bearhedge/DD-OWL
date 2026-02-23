@@ -48,6 +48,18 @@ export interface ScrapedDeal {
   board: 'mainBoard' | 'gem';
 }
 
+/**
+ * Check if a bank name is actually the company itself (not a bank).
+ * When companyName is available, compare directly. Otherwise fall back
+ * to the generic "HOLDINGS LIMITED" heuristic.
+ */
+function isCompanyNotBank(bankName: string, companyName?: string): boolean {
+  if (companyName) {
+    return bankName.trim().toUpperCase() === companyName.trim().toUpperCase();
+  }
+  return /HOLDINGS LIMITED$/i.test(bankName);
+}
+
 let browser: Browser | null = null;
 
 export async function getBrowser(): Promise<Browser> {
@@ -178,7 +190,7 @@ async function getApplicationsFromYear(
 /**
  * Download PDF and extract bank data
  */
-export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<PdfExtractionResult> {
+export async function extractBanksFromPdf(page: Page, pdfUrl: string, companyName?: string): Promise<PdfExtractionResult> {
   const banks: BankAppointment[] = [];
   let chineseName: string | null = null;
 
@@ -286,7 +298,7 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<P
           .filter(s => bankSuffixPattern.test(s) && s.length > 10);
 
         for (const bankName of bankNames) {
-          if (!banks.find(b => b.bank === bankName) && !bankName.match(/HOLDINGS LIMITED$/i)) {
+          if (!banks.find(b => b.bank === bankName) && !isCompanyNotBank(bankName, companyName)) {
             const isLead = roles.includes('sponsor') || roles.includes('coordinator');
             banks.push({ bank: bankName, roles, isLead });
           }
@@ -322,7 +334,7 @@ export async function extractBanksFromPdf(page: Page, pdfUrl: string): Promise<P
         cleaned.match(/^[A-Z]/) &&
         cleaned.length > 15 &&
         cleaned.length < 80 &&
-        !cleaned.match(/HOLDINGS LIMITED$/i) &&
+        !isCompanyNotBank(cleaned, companyName) &&
         !cleaned.match(/Stock Exchange|Commission|responsibility|disclaimer|announcement/i) &&
         (cleaned.match(/Securities|Capital|Financial|Bank|Partners|Investment/i) || currentRoles[0] !== 'other');
 
@@ -356,7 +368,7 @@ export interface PdfExtractionResult {
  * Standalone PDF bank extraction (no Puppeteer needed)
  * Downloads PDF via axios and extracts banks + Chinese company name
  */
-export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<PdfExtractionResult> {
+export async function extractBanksFromPdfUrl(pdfUrl: string, companyName?: string): Promise<PdfExtractionResult> {
   try {
     const response = await axios.get(pdfUrl, {
       responseType: 'arraybuffer',
@@ -375,7 +387,7 @@ export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<PdfExtract
     const parser = new PDFParse({ data: uint8Array, cMapUrl, cMapPacked: true });
     const result = await parser.getText();
 
-    const banks = parseBanksFromText(result.pages);
+    const banks = parseBanksFromText(result.pages, companyName);
 
     // Extract Chinese company name from first few pages
     const firstPagesText = result.pages.slice(0, 3).map(p => p.text).join('\n');
@@ -391,7 +403,7 @@ export async function extractBanksFromPdfUrl(pdfUrl: string): Promise<PdfExtract
 /**
  * Shared bank parsing logic used by both Puppeteer and standalone extractors
  */
-function parseBanksFromText(pages: { text: string }[]): BankAppointment[] {
+function parseBanksFromText(pages: { text: string }[], companyName?: string): BankAppointment[] {
   const banks: BankAppointment[] = [];
 
   type Role = 'sponsor' | 'coordinator' | 'bookrunner' | 'leadManager' | 'other';
@@ -455,7 +467,7 @@ function parseBanksFromText(pages: { text: string }[]): BankAppointment[] {
         .filter(s => bankSuffixPattern.test(s) && s.length > 10);
 
       for (const bankName of bankNames) {
-        if (!banks.find(b => b.bank === bankName) && !bankName.match(/HOLDINGS LIMITED$/i)) {
+        if (!banks.find(b => b.bank === bankName) && !isCompanyNotBank(bankName, companyName)) {
           const isLead = roles.includes('sponsor') || roles.includes('coordinator');
           banks.push({ bank: bankName, roles, isLead });
         }
@@ -489,7 +501,7 @@ function parseBanksFromText(pages: { text: string }[]): BankAppointment[] {
       cleaned.match(/^[A-Z]/) &&
       cleaned.length > 15 &&
       cleaned.length < 80 &&
-      !cleaned.match(/HOLDINGS LIMITED$/i) &&
+      !isCompanyNotBank(cleaned, companyName) &&
       !cleaned.match(/Stock Exchange|Commission|responsibility|disclaimer|announcement/i) &&
       (cleaned.match(/Securities|Capital|Financial|Bank|Partners|Investment/i) || currentRoles[0] !== 'other');
 
@@ -566,7 +578,7 @@ export async function scrapeAllApplications(options: {
     let pdfChineseName: string | null = null;
 
     if (extractBanks && app.ocPdfUrl) {
-      const pdfResult = await extractBanksFromPdf(page, app.ocPdfUrl);
+      const pdfResult = await extractBanksFromPdf(page, app.ocPdfUrl, app.company);
       banks = pdfResult.banks;
       pdfChineseName = pdfResult.chineseName;
       console.log(`    Banks: ${banks.length}`);

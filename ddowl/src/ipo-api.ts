@@ -663,7 +663,7 @@ ipoRouter.post('/rescrape-missing-banks', async (req: Request, res: Response) =>
       }
 
       console.log(`Re-scraping: ${deal.company_name}`);
-      const { banks, chineseName } = await extractBanksFromPdfUrl(deal.pdf_url);
+      const { banks, chineseName } = await extractBanksFromPdfUrl(deal.pdf_url, deal.company_name);
 
       // Save Chinese name if found
       if (chineseName) {
@@ -750,7 +750,7 @@ ipoRouter.post('/extract-chinese-names', async (req: Request, res: Response) => 
 
     for (const deal of deals) {
       console.log(`Extracting Chinese name: ${deal.company_name}`);
-      const { chineseName } = await extractBanksFromPdfUrl(deal.pdf_url);
+      const { chineseName } = await extractBanksFromPdfUrl(deal.pdf_url, deal.company_name);
 
       if (chineseName) {
         await pool.query(`
@@ -1112,6 +1112,23 @@ ipoRouter.post('/fix-deal-bank', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Fix deal bank error:', err);
     res.status(500).json({ error: 'Failed to fix deal bank' });
+  }
+});
+
+/**
+ * POST /api/ipo/audit-banks
+ * Runs heuristic checks + LLM verification + auto-fix for bank data quality.
+ * Phase 1: flags deals with 0 banks, no sponsor, single bank, no OC PDF.
+ * Phase 2: for flagged deals, re-parses PDFs and uses DeepSeek to verify, auto-writes fixes.
+ */
+ipoRouter.post('/audit-banks', async (req: Request, res: Response) => {
+  try {
+    const { auditBanks } = await import('./audit-banks.js');
+    const result = await auditBanks(pool);
+    res.json(result);
+  } catch (err) {
+    console.error('Audit banks error:', err);
+    res.status(500).json({ error: 'Failed to audit banks' });
   }
 });
 
