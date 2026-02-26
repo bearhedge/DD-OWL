@@ -93,6 +93,9 @@ export const KNOWN_BANKS: Record<string, string[]> = {
   'Longbridge': ['Longbridge', 'Long Bridge', 'Long Bridge HK'],
   '9F Primasia': ['9F Primasia', '9F Prime Asia', '9F Prime', '9F Securities'],
   'ZINVEST': ['ZINVEST', 'ZINVEST Global'],
+
+  // Niche / regional brokers
+  'TFI Securities': ['TFI Securities', 'TFI Securities and Futures', 'TFI Securities and Futures Limited'],
 };
 
 // Keywords that indicate a real bank (must have at least one)
@@ -112,7 +115,7 @@ const BANK_KEYWORDS = [
   'SBI', 'OCBC', 'UOB', 'ANZ', 'Westpac', 'ING', 'Rabobank',
   'Commerzbank', 'Santander', 'BBVA', 'ABN AMRO',
   // Online brokers
-  'Longbridge', 'Long Bridge', '9F Prime', '9F Primasia', 'Primasia', 'ZINVEST',
+  'Longbridge', 'Long Bridge', '9F Prime', '9F Primasia', 'Primasia', 'ZINVEST', 'TFI',
   'China Merchants Securities', 'SPDB International',
   'Jefferies', 'SDIC', 'Ping An', 'Sinolink',
 ];
