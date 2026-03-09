@@ -1215,6 +1215,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
   // Abort controller for cancelling operations on client disconnect
   const abortController = new AbortController();
   const { signal } = abortController;
+  let pastAnalyze = false;  // Once true, disconnect won't abort — lets save/complete finish
 
   // Register this screening (for deduplication)
   activeScreenings.set(screeningKey, abortController);
@@ -1222,8 +1223,11 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
   // Handle client disconnect
   res.on('close', () => {
     console.log(`[V4] Client disconnected for: ${subjectName}`);
-    abortController.abort();
     clearInterval(heartbeat);
+    if (!pastAnalyze) {
+      abortController.abort();
+    }
+    // If pastAnalyze, let the save/complete flow finish naturally
   });
 
   // Parse name variations (comma-separated), always include main name
@@ -2789,10 +2793,68 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
     const toProcess = [...categorized.red, ...categorized.amber];
 
     if (toProcess.length === 0) {
+      pastAnalyze = true;  // Prevent disconnect from aborting — must save report
       clearInterval(heartbeat);
       activeScreenings.delete(screeningKey);
-      sendEvent({ type: 'complete', stats: { totalResults: allResults.length, findings: 0 }, findings: [] });
-      res.end();
+
+      // Build clean results for zero-findings report
+      const zeroCleanResults: Record<string, CleanEntityResult[]> = {};
+      for (const item of categorized.green) {
+        const matchedVariation = nameVariations.find(nv =>
+          item.query.toLowerCase().includes(nv.toLowerCase())
+        ) || item.query;
+        if (!zeroCleanResults[matchedVariation]) {
+          zeroCleanResults[matchedVariation] = [];
+        }
+        zeroCleanResults[matchedVariation].push({
+          url: item.url,
+          title: item.title,
+          snippet: item.snippet,
+        });
+      }
+
+      // Save report even with zero findings
+      const zeroMetrics = tracker.finalize();
+      try {
+        const stableRunId = sessionId;
+        const reportId = await saveReportToDb({
+          runId: stableRunId,
+          subjectName,
+          screenedAt: zeroMetrics.startTime,
+          language: languageParam || 'zh',
+          nameVariations: nameVariations || [],
+          findings: [],
+          cleanResults: Object.keys(zeroCleanResults).length > 0 ? zeroCleanResults : undefined,
+          screeningStats: {
+            gathered: allResults.length,
+            programmaticElimination: {
+              before: allResults.length,
+              after: passed.length,
+              eliminated: progEliminated.length,
+              govBypassed: bypassed.length,
+            },
+            categorized: {
+              red: categorized.red.length,
+              amber: categorized.amber.length,
+              green: categorized.green.length,
+            },
+            processed: { total: 0, adverse: 0, cleared: 0, failed: 0 },
+            consolidated: { before: 0, after: 0 },
+          },
+          costUsd: zeroMetrics.totalCostUSD,
+          durationMs: zeroMetrics.durationMs || 0,
+          queriesExecuted: zeroMetrics.queriesExecuted,
+          totalSearchResults: zeroMetrics.totalSearchResults,
+        });
+        console.log(`[REPORTS] Saved zero-findings report #${reportId} for ${subjectName}`);
+        await updateSession(sessionId, { runId: stableRunId, cleanResults: zeroCleanResults } as any, connectionId);
+      } catch (reportErr) {
+        console.error('[REPORTS] Failed to save zero-findings report:', reportErr);
+      }
+
+      sendEvent({ type: 'complete', stats: { totalResults: allResults.length, findings: 0 }, findings: [], cleanResults: zeroCleanResults });
+      await updateSession(sessionId, { currentPhase: 'complete' }, connectionId);
+      try { res.end(); } catch {}
       return;
     }
 
@@ -3119,6 +3181,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
     // ========================================
     // PHASE 5: CONSOLIDATE
     // ========================================
+    pastAnalyze = true;  // From here on, disconnect won't abort — save must complete
     let consolidatedFindings: ConsolidatedFinding[] = [];
 
     // Include snippet-based (fetchFailed) findings in consolidation instead of separating them
@@ -3138,7 +3201,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         console.log(`[V4] Signal aborted before consolidate — skipping to prevent stale write`);
         clearInterval(heartbeat);
         activeScreenings.delete(screeningKey);
-        res.end();
+        try { res.end(); } catch {}
         return;
       }
 
@@ -3370,7 +3433,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
     activeScreenings.delete(screeningKey);
     // Keep session for resume - mark as completed instead of deleting
     await updateSession(sessionId, { currentPhase: 'complete' }, connectionId);
-    res.end();
+    try { res.end(); } catch {}
   } catch (error) {
     clearInterval(heartbeat);
     activeScreenings.delete(screeningKey);
@@ -3379,7 +3442,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
     // valuable progress (currentIndex, findings) that the next reconnect needs.
     console.error('[V4] Screening error:', error);
     sendEvent({ type: 'error', message: 'Screening failed' });
-    res.end();
+    try { res.end(); } catch {};
   } finally {
     await closeBrowser();
   }
