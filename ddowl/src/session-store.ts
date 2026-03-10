@@ -34,6 +34,7 @@ export interface ScreeningSession {
 
   // Phase 1: Gather progress
   gatherIndex?: number;           // Which query template completed (1-indexed: 1 to N)
+  queriesExecuted?: number;       // Number of search queries executed during gather (for reconnect)
 
   // Phase 1.5: Company Expansion progress
   companyExpansionIndex?: number; // Which company we've searched (1-indexed)

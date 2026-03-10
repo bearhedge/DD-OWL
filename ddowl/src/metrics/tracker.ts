@@ -43,6 +43,10 @@ export class MetricsTracker {
     this.metrics.totalSearchResults += resultsFound;
   }
 
+  restoreQueryCount(count: number): void {
+    this.metrics.queriesExecuted = count;
+  }
+
   recordUrlProcessed(isDuplicate: boolean): void {
     if (isDuplicate) {
       this.metrics.duplicatesSkipped++;
