@@ -133,6 +133,14 @@ export class MetricsTracker {
     return this.metrics;
   }
 
+  getLLMCallCount(): number {
+    return this.metrics.costs.length;
+  }
+
+  getLLMCostUSD(): number {
+    return this.metrics.costs.reduce((sum, c) => sum + c.estimatedCostUSD, 0);
+  }
+
   getMetrics(): ScreeningMetrics {
     return { ...this.metrics };
   }

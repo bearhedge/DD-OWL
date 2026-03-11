@@ -31,6 +31,8 @@ export interface ScreeningStats {
   categorized: { red: number; amber: number; green: number };
   processed: { total: number; adverse: number; cleared: number; failed: number; further?: number };
   consolidated: { before: number; after: number };
+  llmCallCount?: number;
+  llmCostUsd?: number;
 }
 
 export interface SaveReportInput {

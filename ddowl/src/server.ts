@@ -266,7 +266,8 @@ function extractCompaniesFromResults(results: BatchSearchResult[]): DetectedComp
  */
 async function searchCompanyAdverseMedia(
   company: DetectedCompany,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  tracker?: MetricsTracker
 ): Promise<BatchSearchResult[]> {
   const results: BatchSearchResult[] = [];
 
@@ -284,6 +285,7 @@ async function searchCompanyAdverseMedia(
     if (signal?.aborted) break;
     try {
       const searchResults = await searchGoogle(query, 1, 10, signal);
+      tracker?.recordQuery(searchResults.length);
       for (const r of searchResults) {
         results.push({
           url: r.link,  // SearchResult uses 'link' not 'url'
@@ -1683,6 +1685,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
         }
 
         const pageResults = await searchGoogle(query, page, 10, signal, entry.hl);
+        tracker.recordQuery(pageResults.length);
 
         sendEvent({
           type: 'search_page',
@@ -1724,8 +1727,6 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
         resultsFound: googleResults.length,
         totalSoFar: allResults.length,
       });
-      tracker.recordQuery(googleResults.length);
-
       // Save progress after EACH query completes (for mid-gather resume)
       await updateSession(sessionId, {
         gatheredResults: allResults,
@@ -1829,7 +1830,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
             message: `Searching adverse media for ${companyName} (${compIdx + 1}/${detectedCompanies.length})...`
           });
 
-          const companyResults = await searchCompanyAdverseMedia(company, signal);
+          const companyResults = await searchCompanyAdverseMedia(company, signal, tracker);
 
           if (companyResults.length > 0) {
             sendEvent({
@@ -1890,6 +1891,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
       try {
         const bioHl = isChineseName(subjectName) ? 'zh-cn' : 'en';
         const bioSearchResults = await searchGoogle(`"${subjectName}"`, 1, 10, undefined, bioHl);
+        tracker.recordQuery(bioSearchResults.length);
         bioResults = bioSearchResults.map(r => ({ title: r.title, snippet: r.snippet }));
         console.log(`[V4] Bio search: ${bioResults.length} results for "${subjectName}"`);
       } catch (err: any) {
@@ -2161,6 +2163,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
           if (signal.aborted) break;
           try {
             const pageResults = await searchGoogle(query, page, 10, signal, tmpl.hl);
+            tracker.recordQuery(pageResults.length);
             sendEvent({
               type: 'search_page',
               engine: 'google',
@@ -2855,6 +2858,8 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
             },
             processed: { total: 0, adverse: 0, cleared: 0, failed: 0, further: 0 },
             consolidated: { before: 0, after: 0 },
+            llmCallCount: zeroMetrics.costs.length,
+            llmCostUsd: zeroMetrics.costs.reduce((sum: number, c: any) => sum + c.estimatedCostUSD, 0),
           },
           costUsd: zeroMetrics.totalCostUSD,
           durationMs: zeroMetrics.durationMs || 0,
@@ -3410,6 +3415,8 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
             before: allFindings.length,
             after: consolidatedFindings.length,
           },
+          llmCallCount: metrics.costs.length,
+          llmCostUsd: metrics.costs.reduce((sum: number, c: any) => sum + c.estimatedCostUSD, 0),
         },
         costUsd: metrics.totalCostUSD,
         durationMs: metrics.durationMs || 0,

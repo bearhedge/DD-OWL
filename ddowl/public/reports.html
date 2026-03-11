@@ -372,7 +372,6 @@
     .funnel-table tr:last-child td { border-bottom: none; }
     .funnel-phase { color: #888; }
     .funnel-count { font-weight: 600; color: #4a9eff; font-variant-numeric: tabular-nums; }
-    .funnel-rate { color: #666; font-size: 11px; }
     .funnel-desc { color: #555; font-size: 11px; }
 
     .empty-state {
@@ -601,73 +600,62 @@
           const gathered = s.gathered || 0;
           const afterFilter = s.programmaticElimination?.after || 0;
           const eliminated = s.programmaticElimination?.eliminated || 0;
+          const govBypassed = s.programmaticElimination?.govBypassed || 0;
+          const noiseEliminated = eliminated;
+          const totalFiltered = gathered - afterFilter;
           const redCount = s.categorized?.red || 0;
           const amberCount = s.categorized?.amber || 0;
           const flaggedCount = redCount + amberCount;
+          const greenCount = s.categorized?.green || 0;
           const totalAnalyzed = s.processed?.total || 0;
           const adverse = s.processed?.adverse || 0;
+          const cleared = s.processed?.cleared || 0;
           const failed = s.processed?.failed || 0;
           const dedupBefore = s.consolidated?.before || 0;
           const dedupAfter = s.consolidated?.after || report.finding_count;
 
-          const passRate = gathered > 0 ? (afterFilter / gathered * 100).toFixed(1) : '—';
-          const flaggedRate = afterFilter > 0 ? (flaggedCount / afterFilter * 100).toFixed(1) : '—';
-          const analyzeRate = flaggedCount > 0 ? (totalAnalyzed / flaggedCount * 100).toFixed(1) : '—';
-          const hitRate = totalAnalyzed > 0 ? (adverse / totalAnalyzed * 100).toFixed(1) : '—';
-          const failRate = totalAnalyzed > 0 ? (failed / totalAnalyzed * 100).toFixed(1) : '—';
-
           const rows = [];
           rows.push(`<tr>
-            <td class="funnel-phase">Search Results</td>
+            <td class="funnel-phase">Found</td>
             <td class="funnel-count">${fmt(gathered)}</td>
-            <td class="funnel-rate">—</td>
-            <td class="funnel-desc">Links found across all search queries</td>
+            <td class="funnel-desc">Links found across all queries</td>
           </tr>`);
           rows.push(`<tr>
-            <td class="funnel-phase">Noise Filter</td>
+            <td class="funnel-phase">Filtered</td>
+            <td class="funnel-count" style="color:#ff4757;">−${fmt(totalFiltered)}</td>
+            <td class="funnel-desc">${fmt(noiseEliminated)} noise${govBypassed > 0 ? ', ' + fmt(govBypassed) + ' gov bypass' : ''}</td>
+          </tr>`);
+          rows.push(`<tr>
+            <td class="funnel-phase">Kept</td>
             <td class="funnel-count">${fmt(afterFilter)}</td>
-            <td class="funnel-rate">${passRate}% pass</td>
-            <td class="funnel-desc">Removed ${fmt(eliminated)} irrelevant/duplicate links</td>
+            <td class="funnel-desc">Passed noise filters</td>
           </tr>`);
           rows.push(`<tr>
-            <td class="funnel-phase">Categorized</td>
-            <td><span class="severity-badge red">${fmt(redCount)} RED</span> <span class="severity-badge amber">${fmt(amberCount)} AMBER</span></td>
-            <td class="funnel-rate">${flaggedRate}% flagged</td>
-            <td class="funnel-desc">AI classified by risk severity</td>
+            <td class="funnel-phase">Flagged</td>
+            <td class="funnel-count">${fmt(flaggedCount)}</td>
+            <td class="funnel-desc"><span class="severity-badge red">${fmt(redCount)} RED</span> <span class="severity-badge amber">${fmt(amberCount)} AMBER</span>${greenCount > 0 ? ' (' + fmt(greenCount) + ' cleared)' : ''}</td>
           </tr>`);
           rows.push(`<tr>
-            <td class="funnel-phase">Deep Analysis</td>
+            <td class="funnel-phase">Analyzed</td>
             <td class="funnel-count">${fmt(totalAnalyzed)}</td>
-            <td class="funnel-rate">${analyzeRate}% of flagged</td>
-            <td class="funnel-desc">Full article fetch + LLM analysis</td>
+            <td class="funnel-desc">Full article fetch + LLM analysis${failed > 0 ? ' (' + fmt(failed) + ' inaccessible)' : ''}</td>
           </tr>`);
           rows.push(`<tr>
-            <td class="funnel-phase">Confirmed Adverse</td>
+            <td class="funnel-phase">Adverse</td>
             <td class="funnel-count">${fmt(adverse)}</td>
-            <td class="funnel-rate">${hitRate}% hit rate</td>
-            <td class="funnel-desc">Articles with verified adverse content</td>
+            <td class="funnel-desc">${cleared > 0 ? fmt(cleared) + ' cleared' : 'Articles with verified adverse content'}</td>
           </tr>`);
-          if (failed > 0) {
-            rows.push(`<tr>
-              <td class="funnel-phase">Inaccessible</td>
-              <td class="funnel-count">${fmt(failed)}</td>
-              <td class="funnel-rate">${failRate}%</td>
-              <td class="funnel-desc">Articles that couldn't be fetched</td>
-            </tr>`);
-          }
           if (dedupBefore > 0 && dedupBefore !== dedupAfter) {
             rows.push(`<tr>
-              <td class="funnel-phase">Final Findings</td>
+              <td class="funnel-phase">Findings</td>
               <td class="funnel-count">${fmt(dedupAfter)}</td>
-              <td class="funnel-rate">—</td>
               <td class="funnel-desc">After deduplication (${fmt(dedupBefore)} → ${fmt(dedupAfter)})</td>
             </tr>`);
           } else {
             rows.push(`<tr>
-              <td class="funnel-phase">Final Findings</td>
+              <td class="funnel-phase">Findings</td>
               <td class="funnel-count">${fmt(dedupAfter)}</td>
-              <td class="funnel-rate">—</td>
-              <td class="funnel-desc">Total findings in report</td>
+              <td class="funnel-desc">Final findings in report</td>
             </tr>`);
           }
 
@@ -675,7 +663,7 @@
             <div style="background:#0a0a0a; border:1px solid #222; border-radius:8px; padding:12px 16px; margin-bottom:16px;">
               <div style="color:#888; margin-bottom:8px; font-size:11px; text-transform:uppercase;">Screening Funnel</div>
               <table class="funnel-table">
-                <thead><tr><th>Phase</th><th>Count</th><th>Rate</th><th>Description</th></tr></thead>
+                <thead><tr><th>Phase</th><th>Count</th><th>Description</th></tr></thead>
                 <tbody>${rows.join('')}</tbody>
               </table>
             </div>`;
@@ -688,9 +676,29 @@
         ? `${report.finding_count} findings · ${selectedCount} confirmed`
         : `${report.finding_count} findings`;
 
+      // Build metrics breakdown line
+      const stats = report.screening_stats_json ? JSON.parse(report.screening_stats_json) : null;
+      const llmCalls = stats?.llmCallCount || 0;
+      const llmCost = stats?.llmCostUsd || 0;
+      const serperCost = report.queries_executed * 0.001;
+      const durationMs = report.duration_ms;
+
+      const fmtDur = (ms) => {
+        if (!ms) return '';
+        const m = Math.floor(ms / 60000);
+        const s = Math.floor((ms % 60000) / 1000);
+        return m > 0 ? `${m}m ${String(s).padStart(2,'0')}s` : `${s}s`;
+      };
+
+      const metricsLine = [
+        `${report.queries_executed} searches ($${serperCost.toFixed(2)})`,
+        llmCalls > 0 ? `${llmCalls} LLM calls ($${llmCost.toFixed(4)})` : null,
+        durationMs > 0 ? fmtDur(durationMs) : null,
+      ].filter(Boolean).join(' · ');
+
       let html = `
         <div style="font-size:12px; color:#666; margin-bottom:16px;">
-          ${date} | ${issueLabel} | ${report.queries_executed} queries | $${report.cost_usd.toFixed(2)}
+          ${date} | ${issueLabel} | ${metricsLine}
           ${nameVars.length > 1 ? ' | Variants: ' + nameVars.map(v => escapeHtml(v)).join(', ') : ''}
         </div>
         ${statsHtml}
