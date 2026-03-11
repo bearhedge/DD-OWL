@@ -15,6 +15,8 @@ export const PROVIDER_PRICING = {
   },
 } as const;
 
+export const SERPER_COST_PER_QUERY = 0.001; // ~$0.001 per search credit
+
 export type Provider = keyof typeof PROVIDER_PRICING;
 
 export function estimateCost(

@@ -618,7 +618,8 @@ async function categorizeBatch(
   results: BatchSearchResult[],
   subjectName: string,
   batchOffset: number = 0,
-  subjectProfile?: SubjectProfile | null
+  subjectProfile?: SubjectProfile | null,
+  onLLMCall?: (provider: string, operation: string, input: string, output: string) => void
 ): Promise<CategorizedOutput> {
   const output: CategorizedOutput = { red: [], amber: [], green: [] };
 
@@ -746,6 +747,7 @@ If no subject profile was provided above, omit entityMatch and entityReason fiel
         ? await callGeminiAPI(provider, prompt)
         : await callOpenAICompatibleAPI(provider, prompt);
       console.log(`[CATEGORIZE] ✓ ${provider.name} succeeded`);
+      onLLMCall?.(provider.name.toLowerCase(), 'triage', prompt, rawText);
       break;
     } catch (error: any) {
       console.error(`[CATEGORIZE] ✗ ${provider.name} failed: ${error.message}`);
@@ -821,7 +823,8 @@ export async function categorizeAll(
   subjectName: string,
   subjectProfile?: SubjectProfile | null,
   onBatchComplete?: (progress: BatchProgress) => void | Promise<void>,  // Allow async callbacks
-  signal?: AbortSignal  // For cross-instance abort on ownership loss
+  signal?: AbortSignal,  // For cross-instance abort on ownership loss
+  onLLMCall?: (provider: string, operation: string, input: string, output: string) => void
 ): Promise<CategorizedOutput> {
   if (results.length === 0) {
     return { red: [], amber: [], green: [] };
@@ -843,7 +846,7 @@ export async function categorizeAll(
     const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
     console.log(`[CATEGORIZE] Processing batch ${batchNumber}/${totalBatches} (${batch.length} items)`);
 
-    const batchResult = await categorizeBatch(batch, subjectName, i, subjectProfile);
+    const batchResult = await categorizeBatch(batch, subjectName, i, subjectProfile, onLLMCall);
     output.red.push(...batchResult.red);
     output.amber.push(...batchResult.amber);
     output.green.push(...batchResult.green);

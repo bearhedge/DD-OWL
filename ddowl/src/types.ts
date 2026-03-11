@@ -145,7 +145,7 @@ export interface MatchConfidence {
 // Cost tracking per LLM call
 export interface CostEstimate {
   provider: 'deepseek' | 'kimi' | 'gemini';
-  operation: 'triage' | 'quickscan' | 'analysis' | 'consolidation';
+  operation: 'triage' | 'quickscan' | 'analysis' | 'consolidation' | 'profile' | 'subsidiary';
   inputTokens: number;
   outputTokens: number;
   estimatedCostUSD: number;

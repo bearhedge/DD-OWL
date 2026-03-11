@@ -398,7 +398,8 @@ export async function fetchPageContent(url: string, signal?: AbortSignal): Promi
 // Quick scan for YELLOW result filtering (lightweight pre-analysis)
 export async function quickScan(
   url: string,
-  subjectName: string
+  subjectName: string,
+  onLLMCall?: (provider: string, input: string, output: string) => void
 ): Promise<{ shouldAnalyze: boolean; reason: string }> {
   // Fetch first 1500 chars only
   let content = '';
@@ -440,6 +441,8 @@ Answer in JSON:
     );
 
     const rawText = response.data.choices?.[0]?.message?.content || '';
+    onLLMCall?.(DEEPSEEK_API_KEY ? 'deepseek' : 'kimi', prompt, rawText);
+
     // Strip markdown code blocks that DeepSeek wraps around JSON
     const text = rawText.replace(/```json\s*/gi, '').replace(/```/g, '');
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -466,7 +469,8 @@ export async function analyzeWithLLM(
   subjectName: string,
   searchTerm: string,
   sourceUrl?: string,
-  currentProfile?: { companies: string[]; role?: string; associates: string[] }
+  currentProfile?: { companies: string[]; role?: string; associates: string[] },
+  onLLMCall?: (provider: string, input: string, output: string) => void
 ): Promise<{
   isAdverse: boolean;
   severity: 'RED' | 'AMBER' | 'GREEN' | 'REVIEW';
@@ -607,6 +611,8 @@ If the article does NOT mention "${subjectName}" or has NO adverse information, 
     console.log(`[ANALYZE] ✓ LLM responded in ${llmTime}ms`);
 
     const rawText = response.data.choices?.[0]?.message?.content || '';
+    onLLMCall?.(DEEPSEEK_API_KEY ? 'deepseek' : 'kimi', prompt, rawText);
+
     // Strip markdown code blocks that DeepSeek wraps around JSON
     const text = rawText.replace(/```json\s*/gi, '').replace(/```/g, '');
 

@@ -45,6 +45,7 @@ import { loadHistory, markRunClean, getRunDiff } from './run-tracker.js';
 import { validateDeals } from './validator.js';
 import { initLogDirectories, saveScreeningLog as saveLog, loadScreeningLog as loadLog, listScreeningLogs, saveBenchmarkResult, loadBenchmarkResults, saveFunnelSnapshot } from './logging/storage.js';
 import { MetricsTracker } from './metrics/tracker.js';
+import type { Provider } from './metrics/costs.js';
 import { evaluateBenchmark, getBenchmarkCase } from './metrics/benchmarks.js';
 import { traceFunnel, printTraceReport } from './metrics/tracer.js';
 import { FunnelPhaseSnapshot, FunnelSnapshot } from './types.js';
@@ -1524,9 +1525,14 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
         console.log(`[V4] Restoring ${restoredConsolidated.length} consolidated findings from session`);
       }
 
-      // If screening is already complete, skip everything and return cached results
+      // If screening is already complete, don't re-run the pipeline — just notify client and return
       if (phase === 'complete') {
         console.log(`[V4] Screening already complete, returning cached results`);
+        sendEvent({ type: 'session', sessionId });
+        sendEvent({ type: 'status', message: 'Screening already complete — reconnected to cached results' });
+        sendEvent({ type: 'complete', message: 'Screening complete (cached)' });
+        try { res.end(); } catch {}
+        return;
       }
     } else {
       // New screening: create fresh session
@@ -1995,6 +2001,7 @@ If you cannot determine a field with reasonable confidence, use the default empt
           );
 
           const profileText = profileResponse.data.choices?.[0]?.message?.content || '';
+          tracker.recordLLMCall('deepseek', 'profile', profilePrompt, profileText);
           const cleanText = profileText.replace(/```json\s*/gi, '').replace(/```/g, '');
           const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
 
@@ -2080,6 +2087,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         );
 
         const subRaw = subResp.data.choices?.[0]?.message?.content || '';
+        tracker.recordLLMCall('deepseek', 'subsidiary', subsidiaryPrompt, subRaw);
         const subText = subRaw.replace(/```json\s*/gi, '').replace(/```/g, '');
         const subMatch = subText.match(/\[[\s\S]*\]/);
         if (subMatch) {
@@ -2670,7 +2678,9 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         categorizeBatchIndex: adjustedBatchNumber,
         currentPhase: 'categorize'
       }, connectionId);
-    }, signal);
+    }, signal,
+      (provider, _op, input, output) => tracker.recordLLMCall(provider as Provider, 'triage', input, output)
+    );
 
       // Merge new results with any restored partial results
       // partialCategorized already contains both restored + newly categorized items
@@ -2852,7 +2862,13 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
           totalSearchResults: zeroMetrics.totalSearchResults,
         });
         console.log(`[REPORTS] Saved zero-findings report #${reportId} for ${subjectName}`);
-        await updateSession(sessionId, { runId: stableRunId, cleanResults: zeroCleanResults } as any, connectionId);
+        await updateSession(sessionId, {
+          runId: stableRunId,
+          cleanResults: zeroCleanResults,
+          finalCostUsd: zeroMetrics.totalCostUSD,
+          finalDurationMs: zeroMetrics.durationMs || 0,
+          finalTotalSearchResults: zeroMetrics.totalSearchResults,
+        } as any, connectionId);
       } catch (reportErr) {
         console.error('[REPORTS] Failed to save zero-findings report:', reportErr);
       }
@@ -2991,7 +3007,9 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
             companies: subjectProfile.associatedCompanies.map(c => c.name),
             role: subjectProfile.currentRole?.title,
             associates: subjectProfile.associatedPeople.map(p => p.name),
-          });
+          },
+            (provider, input, output) => tracker.recordLLMCall(provider as Provider, 'analysis', input, output)
+          );
           return { content, analysis };
         };
 
@@ -3399,8 +3417,15 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         totalSearchResults: metrics.totalSearchResults,
       });
       console.log(`[REPORTS] Saved report #${reportId} for ${subjectName}`);
-      // Store runId and cleanResults in session so generate-report can access them
-      await updateSession(sessionId, { runId: stableRunId, cleanResults } as any, connectionId);
+      // Store runId, cleanResults, and final metrics in session so generate-report can access them
+      // and reconnect won't overwrite metrics with zeroed values
+      await updateSession(sessionId, {
+        runId: stableRunId,
+        cleanResults,
+        finalCostUsd: metrics.totalCostUSD,
+        finalDurationMs: metrics.durationMs || 0,
+        finalTotalSearchResults: metrics.totalSearchResults,
+      } as any, connectionId);
     } catch (reportErr) {
       console.error('[REPORTS] Failed to save to database:', reportErr);
     }

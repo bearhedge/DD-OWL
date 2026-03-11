@@ -1,5 +1,5 @@
 import { ScreeningMetrics, CostEstimate } from '../types.js';
-import { estimateCost, estimateTokens, Provider } from './costs.js';
+import { estimateCost, estimateTokens, Provider, SERPER_COST_PER_QUERY } from './costs.js';
 
 export class MetricsTracker {
   private metrics: ScreeningMetrics;
@@ -41,6 +41,7 @@ export class MetricsTracker {
   recordQuery(resultsFound: number): void {
     this.metrics.queriesExecuted++;
     this.metrics.totalSearchResults += resultsFound;
+    this.metrics.totalCostUSD += SERPER_COST_PER_QUERY;
   }
 
   restoreQueryCount(count: number): void {

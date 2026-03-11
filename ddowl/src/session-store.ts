@@ -63,6 +63,11 @@ export interface ScreeningSession {
   recentEvents?: { type: string; data: any; timestamp: number }[];  // Last N events for replay
   lastEventIndex?: number;  // Index of last event sent to client
 
+  // === Final metrics (persisted after report save, survives reconnect) ===
+  finalCostUsd?: number;
+  finalDurationMs?: number;
+  finalTotalSearchResults?: number;
+
   // === Connection ownership ===
   connectionId?: string;  // ID of the connection that owns this session
 }
