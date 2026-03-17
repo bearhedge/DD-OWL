@@ -74,6 +74,7 @@ const TRASH_DOMAINS = new Set([
   'ikcij.com',        // Fake ICIJ impersonator, broken links
   'icij-data.com',    // Another ICIJ impersonator
   'offshoreleaks.cc', // Fake offshore leaks mirror
+  'laichack.edu.hk',  // SEO spam with char-by-char pinyin annotations
   // Add more as discovered
 ]);
 
@@ -169,8 +170,14 @@ function isOnlyPartOfLongerName(text: string, name: string): boolean {
   // Only applies to 2-character Chinese names
   if (name.length !== 2) return false;
 
+  // Strip parenthesized annotations that break character adjacency
+  // SEO spam sites insert glosses like 高志(志)远 or 高志(zhì)远
+  const cleanText = text
+    .replace(/[（(][\u4e00-\u9fff][）)]/g, '')           // single CJK char: (志) （遠）
+    .replace(/[（(][a-zA-Z\u00C0-\u024F]{1,7}[）)]/g, ''); // pinyin: (zhì) （dì）
+
   // Check if the name even appears in the text
-  if (!text.includes(name)) return false;
+  if (!cleanText.includes(name)) return false;
 
   const chineseCharRegex = /[\u4e00-\u9fff]/;
 
@@ -180,9 +187,9 @@ function isOnlyPartOfLongerName(text: string, name: string): boolean {
   let index = 0;
   let hasStandaloneOccurrence = false;
 
-  while ((index = text.indexOf(name, index)) !== -1) {
-    const charBefore = index > 0 ? text[index - 1] : '';
-    const charAfter = text[index + name.length] || '';
+  while ((index = cleanText.indexOf(name, index)) !== -1) {
+    const charBefore = index > 0 ? cleanText[index - 1] : '';
+    const charAfter = cleanText[index + name.length] || '';
 
     const hasChineBefore = chineseCharRegex.test(charBefore);
     const hasChineAfter = chineseCharRegex.test(charAfter);
@@ -201,6 +208,75 @@ function isOnlyPartOfLongerName(text: string, name: string): boolean {
   }
 
   // Eliminate if ALL occurrences are part of longer names (no standalone)
+  return !hasStandaloneOccurrence;
+}
+
+/**
+ * Rule 5c: Check if romanized name only appears as part of longer romanized names
+ * E.g., "Gao Zhi" only appearing in "Gao Zhisheng", "Gao Zhi Xin", "GAO ZHI XIN"
+ */
+function isOnlyPartOfLongerRomanizedName(text: string, name: string): boolean {
+  // Only applies to romanized names (2 space-separated words like "Gao Zhi")
+  if (!name || !/^[A-Za-z]+ [A-Za-z]+$/.test(name)) return false;
+
+  const nameLower = name.toLowerCase();
+  const textLower = text.toLowerCase();
+
+  if (!textLower.includes(nameLower)) return false;
+
+  // Common English words that are NOT name continuations
+  const stopWords = new Set([
+    'the', 'and', 'was', 'were', 'has', 'had', 'have', 'is', 'are', 'in',
+    'at', 'of', 'for', 'to', 'on', 'with', 'by', 'from', 'as', 'but',
+    'or', 'not', 'an', 'it', 'he', 'she', 'his', 'her', 'who', 'said',
+    'says', 'been', 'also', 'may', 'will', 'can', 'did', 'does', 'no',
+    'so', 'if', 'this', 'that', 'they', 'its', 'about', 'after', 'while',
+    'when', 'where', 'which', 'what', 'how', 'why', 'would', 'could',
+    'should', 'being', 'family', 'according', 'former', 'during', 'under',
+    'between', 'through', 'against', 'among', 'into', 'before',
+  ]);
+
+  let index = 0;
+  let hasStandaloneOccurrence = false;
+
+  while ((index = textLower.indexOf(nameLower, index)) !== -1) {
+    // Must be preceded by non-letter (word boundary)
+    if (index > 0 && /[a-zA-Z]/.test(text[index - 1])) {
+      index++;
+      continue;
+    }
+
+    const afterPos = index + nameLower.length;
+    const charAfter = text[afterPos] || '';
+
+    // Case 1: Immediately followed by letters → concatenated name (Gao Zhisheng)
+    if (/[a-zA-Z]/.test(charAfter)) {
+      index++;
+      continue;
+    }
+
+    // Case 2: Followed by space/hyphen → check if next word is a name part
+    if (charAfter === ' ' || charAfter === '-') {
+      const rest = text.substring(afterPos + 1);
+      // Title Case next word: "Gao Zhi Xin"
+      const titleCase = rest.match(/^([A-Z][a-z]{0,5})\b/);
+      if (titleCase && !stopWords.has(titleCase[1].toLowerCase())) {
+        index++;
+        continue;
+      }
+      // ALL CAPS next word: "GAO ZHI XIN"
+      const allCaps = rest.match(/^([A-Z]{1,6})\b/);
+      if (allCaps && !stopWords.has(allCaps[1].toLowerCase())) {
+        index++;
+        continue;
+      }
+    }
+
+    // Not part of a longer name → standalone occurrence
+    hasStandaloneOccurrence = true;
+    break;
+  }
+
   return !hasStandaloneOccurrence;
 }
 
@@ -309,6 +385,26 @@ export function eliminateObviousNoise(
         eliminated.push({ ...result, reason: 'part_of_longer_name' });
         continue;
       }
+    }
+
+    // Rule 5c: Romanized name only appears as part of longer romanized names
+    // E.g., "Gao Zhi" only appears in "Gao Zhisheng" or "GAO ZHI XIN"
+    if (nameVariations.length > 0) {
+      const romanizedIsLongerName = nameVariations.some(variation =>
+        /^[A-Za-z]+ [A-Za-z]+$/.test(variation) &&
+        text.toLowerCase().includes(variation.toLowerCase()) &&
+        isOnlyPartOfLongerRomanizedName(text, variation)
+      );
+      if (romanizedIsLongerName) {
+        eliminated.push({ ...result, reason: 'part_of_longer_name' });
+        continue;
+      }
+    }
+
+    // Also check subject name itself if it's romanized
+    if (/^[A-Za-z]+ [A-Za-z]+$/.test(subjectName) && isOnlyPartOfLongerRomanizedName(text, subjectName)) {
+      eliminated.push({ ...result, reason: 'part_of_longer_name' });
+      continue;
     }
 
     // Passed all rules
