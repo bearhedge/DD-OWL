@@ -2296,7 +2296,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
       sendEvent({ type: 'phase', phase: 2, name: 'PROGRAMMATIC_ELIMINATION', message: `Running programmatic filters on ${allResults.length} results...` });
 
       const elimStart = Date.now();
-      const elimResult = eliminateObviousNoise(allResults, subjectName);
+      const elimResult = eliminateObviousNoise(allResults, subjectName, nameVariations);
       passed = elimResult.passed;
       progEliminated = elimResult.eliminated;
       bypassed = elimResult.bypassed;

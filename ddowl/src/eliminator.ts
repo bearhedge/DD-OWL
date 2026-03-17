@@ -250,7 +250,8 @@ function isMissingDirtyWord(
  */
 export function eliminateObviousNoise(
   results: BatchSearchResult[],
-  subjectName: string
+  subjectName: string,
+  nameVariations: string[] = []
 ): EliminationResult {
   const passed: BatchSearchResult[] = [];
   const eliminated: EliminatedResult[] = [];
@@ -294,6 +295,20 @@ export function eliminateObviousNoise(
     if (isOnlyPartOfLongerName(text, subjectName)) {
       eliminated.push({ ...result, reason: 'part_of_longer_name' });
       continue;
+    }
+
+    // Rule 5b: Same check for name variations (e.g., 高志 only appears as 高志凱)
+    if (nameVariations.length > 0) {
+      const variationIsLongerName = nameVariations.some(variation =>
+        variation !== subjectName &&
+        variation.length === 2 &&
+        text.includes(variation) &&
+        isOnlyPartOfLongerName(text, variation)
+      );
+      if (variationIsLongerName) {
+        eliminated.push({ ...result, reason: 'part_of_longer_name' });
+        continue;
+      }
     }
 
     // Passed all rules
