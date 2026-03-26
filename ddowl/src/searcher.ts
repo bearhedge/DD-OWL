@@ -17,6 +17,15 @@ function buildTbs(since: string): string {
   return `cdr:1,cd_min:${min},cd_max:${max}`;
 }
 
+/**
+ * Append Google `after:` operator to a query for date filtering.
+ * Uses `after:YYYY-MM-DD` which is a Google search operator —
+ * works via Serper since it's part of the query string itself.
+ */
+function appendDateFilter(query: string, since: string): string {
+  return `${query} after:${since}`;
+}
+
 export interface SerperResponse {
   organic: Array<{
     title: string;
@@ -44,8 +53,9 @@ export async function searchGoogle(
   const manager = getSerperKeyManager();
 
   const attemptSearch = async (apiKey: string): Promise<SearchResult[]> => {
+    const q = since ? appendDateFilter(query, since) : query;
     const body: Record<string, any> = {
-      q: query,
+      q,
       hl,
       num: resultsPerPage,
       page: page,
