@@ -5,6 +5,18 @@ import { getSerperKeyManager } from './serperKeyManager.js';
 
 const SERPER_URL = 'https://google.serper.dev/search';
 
+/**
+ * Build Serper `tbs` date-range string from ISO date (YYYY-MM-DD).
+ * Format: "cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY"
+ */
+function buildTbs(since: string): string {
+  const d = new Date(since);
+  const min = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  const now = new Date();
+  const max = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`;
+  return `cdr:1,cd_min:${min},cd_max:${max}`;
+}
+
 export interface SerperResponse {
   organic: Array<{
     title: string;
@@ -26,19 +38,24 @@ export async function searchGoogle(
   page: number = 1,
   resultsPerPage: number = 10,
   signal?: AbortSignal,
-  hl: string = 'zh-cn'
+  hl: string = 'zh-cn',
+  since?: string
 ): Promise<SearchResult[]> {
   const manager = getSerperKeyManager();
 
   const attemptSearch = async (apiKey: string): Promise<SearchResult[]> => {
+    const body: Record<string, any> = {
+      q: query,
+      hl,
+      num: resultsPerPage,
+      page: page,
+    };
+    if (since) {
+      body.tbs = buildTbs(since);
+    }
     const response = await axios.post<SerperResponse>(
       SERPER_URL,
-      {
-        q: query,
-        hl,
-        num: resultsPerPage,
-        page: page,
-      },
+      body,
       {
         headers: {
           'X-API-KEY': apiKey,
@@ -102,7 +119,8 @@ export type SearchProgressCallback = (event: {
 export async function searchAllPages(
   query: string,
   maxPages: number = 10,
-  onProgress?: SearchProgressCallback
+  onProgress?: SearchProgressCallback,
+  since?: string
 ): Promise<SearchResult[]> {
   const allResults: SearchResult[] = [];
   const seenUrls = new Set<string>();
@@ -111,7 +129,7 @@ export async function searchAllPages(
   for (let page = 1; page <= maxPages; page++) {
     onProgress?.({ type: 'page_start', engine: 'google', page, maxPages });
 
-    const results = await searchGoogle(query, page);
+    const results = await searchGoogle(query, page, 10, undefined, 'zh-cn', since);
 
     if (results.length === 0) {
       onProgress?.({ type: 'page_end', engine: 'google', page, maxPages, results: [], totalSoFar: allResults.length });
@@ -144,13 +162,14 @@ export async function searchAllEngines(
   query: string,
   maxGooglePages: number = 10,
   maxBaiduPages: number = 3,
-  onProgress?: SearchProgressCallback
+  onProgress?: SearchProgressCallback,
+  since?: string
 ): Promise<SearchResult[]> {
   const seenUrls = new Set<string>();
   const allResults: SearchResult[] = [];
 
   // Run Google search first with progress reporting
-  const googleResults = await searchAllPages(query, maxGooglePages, onProgress);
+  const googleResults = await searchAllPages(query, maxGooglePages, onProgress, since);
 
   // Merge Google results
   for (const result of googleResults) {
@@ -249,7 +268,8 @@ export type BatchSearchProgressCallback = (event: {
 export async function searchAll(
   nameVariants: string[],
   searchTemplates: string[],
-  onProgress?: BatchSearchProgressCallback
+  onProgress?: BatchSearchProgressCallback,
+  since?: string
 ): Promise<BatchSearchResult[]> {
   const allResults: BatchSearchResult[] = [];
 
@@ -278,7 +298,7 @@ export async function searchAll(
     const googleResults: SearchResult[] = [];
 
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const pageResults = await searchGoogle(query, page, 10);
+      const pageResults = await searchGoogle(query, page, 10, undefined, 'zh-cn', since);
 
       // Log each page fetch
       onProgress?.({

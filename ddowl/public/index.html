@@ -255,6 +255,14 @@
       color: #444;
     }
 
+    input[type="date"] {
+      color-scheme: dark;
+    }
+
+    input[type="date"]:focus {
+      border-color: #4a9eff;
+    }
+
     #contextInput {
       width: 100%;
       box-sizing: border-box;
@@ -1790,6 +1798,13 @@
             rows="2"
             placeholder="Further info (e.g. VP at 中國建設銀行, Shenzhen)"
           ></textarea>
+        </div>
+
+        <!-- Search Since Date Filter -->
+        <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+          <label for="sinceInput" style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;">Search since</label>
+          <input type="date" id="sinceInput" style="padding: 8px 12px; font-size: 13px; font-family: inherit; border: 1px solid #333; border-radius: 6px; background: #0a0a0a; color: #fff; outline: none; transition: border-color 0.2s;">
+          <button type="button" onclick="document.getElementById('sinceInput').value=''" style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #666; cursor: pointer; font-size: 14px; line-height: 1;" title="Clear date">&times;</button>
         </div>
 
         <!-- Name Variations Section -->
@@ -3515,7 +3530,9 @@
         isReconnecting = false;  // Reset on actual connection attempt
         const variationsParam = variations.length > 1 ? `&variations=${encodeURIComponent(variations.join(','))}` : '';
         const languageParam = `&language=${language}`;
-        const url = `/api/screen/v4?name=${encodeURIComponent(savedName)}${variationsParam}${languageParam}&sessionId=${savedSessionId}`;
+        const sinceVal = document.getElementById('sinceInput').value;
+        const sinceParam = sinceVal ? `&since=${sinceVal}` : '';
+        const url = `/api/screen/v4?name=${encodeURIComponent(savedName)}${variationsParam}${languageParam}${sinceParam}&sessionId=${savedSessionId}`;
         console.log(`[SSE RESUME] Connecting: ${url}`);
         eventSource = new EventSource(url);
         currentEventSource = eventSource;
@@ -4143,7 +4160,9 @@
         // Include last seen progress so server can tell us what we missed
         const lastSeenParam = sessionId ? `&lastBatch=${lastSeenBatch}&lastArticle=${lastSeenArticle}` : '';
         const contextParam = context ? `&context=${encodeURIComponent(context)}` : '';
-        const url = `/api/screen/v4?name=${encodeURIComponent(name)}${variationsParam}${languageParam}${contextParam}${sessionParam}${lastSeenParam}`;
+        const sinceVal = document.getElementById('sinceInput').value;
+        const sinceParam = sinceVal ? `&since=${sinceVal}` : '';
+        const url = `/api/screen/v4?name=${encodeURIComponent(name)}${variationsParam}${languageParam}${contextParam}${sinceParam}${sessionParam}${lastSeenParam}`;
         console.log(`[SSE] Connecting: ${url}`);
         eventSource = new EventSource(url);
         currentEventSource = eventSource;  // Track globally for disconnect button

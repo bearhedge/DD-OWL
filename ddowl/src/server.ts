@@ -1116,6 +1116,18 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
     console.log(`[V4] Entity context provided: "${subjectContext}"`);
   }
 
+  // Optional "search since" date filter — restricts Serper results to this date onward
+  const sinceParam = req.query.since as string | undefined;
+  let since: string | undefined;
+  if (sinceParam) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(sinceParam) && new Date(sinceParam) < new Date()) {
+      since = sinceParam;
+      console.log(`[V4] Search since date filter: ${since}`);
+    } else {
+      console.warn(`[V4] Invalid since param ignored: "${sinceParam}"`);
+    }
+  }
+
   // Benchmark funnel tracing
   const benchmarkCase = getBenchmarkCase(subjectName);
   const isBenchmarkRun = !!benchmarkCase;
@@ -1684,7 +1696,7 @@ app.get('/api/screen/v4', async (req: Request, res: Response) => {
           return;
         }
 
-        const pageResults = await searchGoogle(query, page, 10, signal, entry.hl);
+        const pageResults = await searchGoogle(query, page, 10, signal, entry.hl, since);
         tracker.recordQuery(pageResults.length);
 
         sendEvent({
@@ -2078,7 +2090,7 @@ If you cannot determine a field with reasonable confidence, use the default empt
           const hl = isChineseName(companyName) ? 'zh-cn' : 'en';
           for (let page = 1; page <= 3; page++) {
             if (signal.aborted) break;
-            const pageResults = await searchGoogle(query, page, 10, signal, hl);
+            const pageResults = await searchGoogle(query, page, 10, signal, hl, since);
             if (pageResults.length === 0) break;
 
             let newResults = 0;
@@ -2220,7 +2232,7 @@ Only include entities you are confident about. Do NOT guess. Return [] if unsure
         for (let page = 1; page <= SUPP_MAX_PAGES; page++) {
           if (signal.aborted) break;
           try {
-            const pageResults = await searchGoogle(query, page, 10, signal, tmpl.hl);
+            const pageResults = await searchGoogle(query, page, 10, signal, tmpl.hl, since);
             tracker.recordQuery(pageResults.length);
             sendEvent({
               type: 'search_page',
