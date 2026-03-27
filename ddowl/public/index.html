@@ -1815,7 +1815,7 @@
               <input
                 type="text"
                 class="variation-input"
-                placeholder="e.g., Chan Tai Man"
+                placeholder="e.g., John Chan"
                 style="flex: 1;"
               >
               <button type="button" onclick="removeVariation(this)" style="padding: 10px 14px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #666; cursor: pointer; font-size: 16px;" title="Remove">×</button>
@@ -4002,13 +4002,16 @@
     }
 
     // Name variation management
+    const variationPlaceholders = ['e.g., John Chan', 'e.g., Chan Tai Man John', 'e.g., J. Chan'];
     function addVariation() {
       const container = document.getElementById('variationsContainer');
+      const existingRows = container.querySelectorAll('.variation-row').length;
+      const placeholder = variationPlaceholders[existingRows % variationPlaceholders.length];
       const row = document.createElement('div');
       row.className = 'variation-row';
       row.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
       row.innerHTML = `
-        <input type="text" class="variation-input" placeholder="e.g., John Chan, Chan Tai Man John" style="flex: 1;">
+        <input type="text" class="variation-input" placeholder="${placeholder}" style="flex: 1;">
         <button type="button" onclick="removeVariation(this)" style="padding: 10px 14px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #666; cursor: pointer; font-size: 16px;" title="Remove">×</button>
       `;
       container.appendChild(row);
